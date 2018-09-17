@@ -689,7 +689,17 @@ pack_loader_image()
 		echo "pack loader okay! Input: $ini"
 	fi
 
-	cd - && mv ${RKBIN}/*_loader_*.bin ./
+    local temp=`grep FlashData= ${RKBIN}/RKBOOT/${RKCHIP_LOADER}MINIALL.ini | cut -f 2 -d "="`
+    local flashData=${temp/tools\/rk_tools\//}
+    temp=`grep FlashBoot= ${RKBIN}/RKBOOT/${RKCHIP_LOADER}MINIALL.ini | cut -f 2 -d "="`
+    local flashBoot=${temp/tools\/rk_tools\//}
+    typeset -l localChip
+    localChip=$RKCHIP
+
+	${RKTOOLS}/mkimage -n ${localChip} -T rksd -d ${flashData} idbloader.img
+    cat ${flashBoot} >> idbloader.img
+
+    cd - && mv ${RKBIN}/*_loader_*.bin ./ && mv ${RKBIN}/idbloader.img ./
 }
 
 __pack_32bit_trust_image()
