@@ -5,11 +5,11 @@
  */
 
 /dts-v1/;
-#include "rk3288-firefly.dtsi"
+#include "rk3288-firefly-aioj.dtsi"
 
 / {
-	model = "Firefly-RK3288";
-	compatible = "firefly,firefly-rk3288", "rockchip,rk3288";
+	model = "AIO-RK3288J";
+	compatible = "firefly,firefly-rk3288-aio", "rockchip,rk3288";
 
 	chosen {
 		stdout-path = &uart2;

@@ -16,6 +16,7 @@
 	adc-keys {
 		compatible = "adc-keys";
 		io-channels = <&saradc 1>;
+		keyup-threshold-microvolt = <1800000>;
 
 		volup-key {
 			linux,code = <KEY_VOLUMEUP>;
@@ -268,20 +269,23 @@
 				regulator-always-on;
 			};
 
-			vcca_18: REG7 {
-				regulator-name = "vcca_18";
-				regulator-min-microvolt = <1800000>;
-				regulator-max-microvolt = <1800000>;
-			};
-
-			vcca_33: REG8 {
+			vcca_33: REG7 {
 				regulator-name = "vcca_33";
 				regulator-min-microvolt = <3300000>;
 				regulator-max-microvolt = <3300000>;
+				regulator-always-on;
 			};
 
-			vcc_lan: REG9 {
+			vcc_lan: REG8 {
 				regulator-name = "vcc_lan";
+				regulator-min-microvolt = <3300000>;
+				regulator-max-microvolt = <3300000>;
+				regulator-always-on;
+				regulator-boot-on;
+			};
+
+			vcc_pmu: REG9 {
+				regulator-name = "vcc_pmu";
 				regulator-min-microvolt = <3300000>;
 				regulator-max-microvolt = <3300000>;
 			};
