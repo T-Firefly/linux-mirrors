@@ -14,6 +14,7 @@
 #include <usb.h>
 #include <usb_mass_storage.h>
 #include <rockusb.h>
+#include <power/regulator.h>
 
 static struct rockusb rkusb;
 static struct rockusb *g_rkusb;
@@ -146,6 +147,7 @@ static int do_rkusb(cmd_tbl_t *cmdtp, int flag, int argc, char *const argv[])
 	int rc;
 	int cable_ready_timeout __maybe_unused;
 	const char *s;
+	struct udevice *usb_otg_vbus;
 
 	if (argc != 4)
 		return CMD_RET_USAGE;
@@ -163,6 +165,14 @@ static int do_rkusb(cmd_tbl_t *cmdtp, int flag, int argc, char *const argv[])
 	rc = rkusb_init(devtype, devnum);
 	if (rc < 0)
 		return CMD_RET_FAILURE;
+
+	rc = regulator_get_by_devname("usb-otg-regulator", &usb_otg_vbus);
+	if (!rc) {
+		rc = regulator_set_enable(usb_otg_vbus, false);
+		if (rc) {
+			pr_err("Disable otg vbus supply fail!\n");
+		}
+	}
 
 	controller_index = (unsigned int)(simple_strtoul(
 				usb_controller,	NULL, 0));
