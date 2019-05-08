@@ -186,6 +186,16 @@
                 regulator-name = "vcc5v0_host";
                 regulator-always-on;
         };
+	
+	vcc_sd3v0: vcc-sd3v0-regulator {
+                compatible = "regulator-fixed";
+                enable-active-high;
+                gpio = <&gpio2 RK_PA5 GPIO_ACTIVE_HIGH>;
+                pinctrl-names = "default";
+                pinctrl-0 = <&sdcard_pwr>;
+                regulator-name = "vcc_sd3v0";
+                regulator-always-on;
+        };
 
 };
 
@@ -870,6 +880,12 @@
 			rockchip,pins =
 				<2 RK_PD3 0 &pcfg_pull_none>;
 		};
+		sdcard_pwr: sdcard-pwr {
+			rockchip,pins =
+				<2 RK_PA5 0 &pcfg_pull_none>;
+
+		};
+
 	};
 
 	sdmmc {
