@@ -198,6 +198,16 @@
                 regulator-always-on;
         };
 	
+	vcc5v0_typec: vcc5v0_typec {
+                compatible = "regulator-fixed";
+                enable-active-high;
+                gpio = <&gpio4 RK_PC5 GPIO_ACTIVE_HIGH>;
+                pinctrl-names = "default";
+                pinctrl-0 = <&host_typec>;
+                regulator-name = "vcc5v0_typec";
+                regulator-always-on;
+        };
+
 	vcc_sd3v0: vcc-sd3v0-regulator {
                 compatible = "regulator-fixed";
                 enable-active-high;
@@ -729,13 +739,21 @@
 };
 
 &sdmmc {
-	sd-uhs-sdr12;
-	sd-uhs-sdr25;
-	sd-uhs-sdr50;
+	clock-frequency = <150000000>;
+	clock-freq-min-max = <100000 150000000>;
+	supports-sd;
+	bus-width = <4>;
+	cap-mmc-highspeed;
+	cap-sd-highspeed;
+	disable-wp;
+	num-slots = <1>;
 	sd-uhs-sdr104;
+	vmmc-supply = <&vcc_sd3v0>;
+	vqmmc-supply = <&vccio_sd>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&sdmmc_clk &sdmmc_cmd &sdmmc_cd &sdmmc_bus4>;
+	status = "okay";
 };
-
-
 
 &spi1 {
 	status = "okay";
@@ -849,6 +867,13 @@
                 host_vbus_drv: host-vbus-drv {
                         rockchip,pins =
                                 <4 RK_PD2 RK_FUNC_GPIO &pcfg_pull_none>;
+                };
+        };
+	
+	usb3 {
+                host_typec: host-typec {
+                        rockchip,pins =
+                                <4 RK_PC5 RK_FUNC_GPIO &pcfg_pull_none>;
                 };
         };
 
