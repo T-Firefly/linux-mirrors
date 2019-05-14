@@ -8,7 +8,7 @@
 #include <dt-bindings/sensor-dev.h>
 #include <dt-bindings/pwm/pwm.h>
 #include "rk3399pro.dtsi"
-#include "rk3399-android.dtsi"
+#include "rk3399-linux.dtsi"
 #include "rk3399-opp.dtsi"
 #include "rk3399-vop-clk-set.dtsi"
 
@@ -273,6 +273,9 @@
 	dynamic-power = <396>;
 };
 
+&display_subsystem {
+	status = "okay";
+};
 
 &hdmi {
 	status = "okay";

@@ -47,11 +47,11 @@
 	model = "RK3399pro-firefly-aiojd4 board";
 	compatible = "rockchip,rk3399pro-firefly-aiojd4", "rockchip,rk3399pro";
 };
-
+/*
 &hdmi_dp_sound {
 	status = "okay";
 };
-
+*/
 &hdmi_in_vopl {
 	status = "disabled";
 };
@@ -77,3 +77,4 @@
     assigned-clocks = <&cru DCLK_VOP1_DIV>;
     assigned-clock-parents = <&cru PLL_CPLL>;
 };
+
