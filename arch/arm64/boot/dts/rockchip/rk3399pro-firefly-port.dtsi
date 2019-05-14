@@ -293,11 +293,6 @@
     /delete-property/ extcon;
 };
 
-
-&usbdrd_dwc3_0 {
-	dr_mode = "otg";
-};
-
 &pwm3 {
 	status = "okay";
 	interrupts = <GIC_SPI 61 IRQ_TYPE_LEVEL_HIGH 0>;
