@@ -312,12 +312,12 @@
 };
 
 &dfi {
-	status = "disabled";
+	status = "okay";
 };
 
 &dmc {
 	center-supply = <&vdd_logic>;
-	status = "disabled";
+	status = "okay";
 };
 
 &emmc {
