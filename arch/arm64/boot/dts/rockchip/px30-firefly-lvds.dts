@@ -227,7 +227,7 @@
 
 	wireless-wlan {
 		compatible = "wlan-platdata";
-		wifi_chip_type = "AP6255";
+		wifi_chip_type = "rtl8723ds";
 		WIFI,host_wake_irq = <&gpio0 RK_PB2 GPIO_ACTIVE_HIGH>;
 		status = "okay";
 	};
