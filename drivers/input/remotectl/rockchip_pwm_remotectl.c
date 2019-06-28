@@ -329,8 +329,10 @@ static irqreturn_t rockchip_pwm_irq(int irq, void *dev_id)
 		}
 	}
 	writel_relaxed(PWM_CH_INT(id), ddata->base + PWM_REG_INTSTS(id));
+#if !defined(CONFIG_ROCKCHIP_REMOTECTL_NO_DEEP_SLEEP)
 	if (ddata->state == RMC_PRELOAD)
 		wake_lock_timeout(&ddata->remotectl_wake_lock, HZ);
+#endif
 	return IRQ_HANDLED;
 }
 
@@ -517,6 +519,9 @@ static int rk_pwm_probe(struct platform_device *pdev)
 		    (unsigned long)ddata);
 	wake_lock_init(&ddata->remotectl_wake_lock,
 		       WAKE_LOCK_SUSPEND, "rockchip_pwm_remote");
+#if defined(CONFIG_ROCKCHIP_REMOTECTL_NO_DEEP_SLEEP)
+	wake_lock(&ddata->remotectl_wake_lock);
+#endif
 	cpumask_clear(&cpumask);
 	cpumask_set_cpu(cpu_id, &cpumask);
 	irq_set_affinity(irq, &cpumask);
@@ -583,6 +588,10 @@ error_clk:
 
 static int rk_pwm_remove(struct platform_device *pdev)
 {
+#if defined(CONFIG_ROCKCHIP_REMOTECTL_NO_DEEP_SLEEP)
+	struct rkxx_remotectl_drvdata *ddata = platform_get_drvdata(pdev);
+	wake_unlock(&ddata->remotectl_wake_lock);
+#endif
 	return 0;
 }
 

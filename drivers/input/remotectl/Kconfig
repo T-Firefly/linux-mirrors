@@ -16,4 +16,9 @@ config ROCKCHIP_REMOTECTL_PWM
 	bool "rockchip remoctrl pwm capture"
 	default n
 
+config ROCKCHIP_REMOTECTL_NO_DEEP_SLEEP
+	bool "No deep sleep when using rockchip remotectl"
+	depends on ROCKCHIP_REMOTECTL
+	default n
+
 endif
