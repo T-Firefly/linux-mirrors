@@ -838,6 +838,7 @@
 	status = "okay";
 	interrupts = <GIC_SPI 24 IRQ_TYPE_LEVEL_HIGH 0>;
 	compatible = "rockchip,remotectl-pwm";
+	pinctrl-names = "default";
 	remote_pwm_id = <3>;
 	handle_cpu_id = <0>;
 	remote_support_psci = <1>;
@@ -846,13 +847,13 @@
         rockchip,usercode = <0xff00>;
         rockchip,key_table =
             <0xeb   KEY_POWER>,
-            <0xec   KEY_MENU>,
+            <0xec   KEY_COMPOSE>,
             <0xfe   KEY_BACK>,
             <0xb7   KEY_HOME>,
             <0xa3   KEY_WWW>,
             <0xf4   KEY_VOLUMEUP>,
             <0xa7   KEY_VOLUMEDOWN>,
-            <0xf8   KEY_REPLY>,
+            <0xf8   KEY_ENTER>,
             <0xfc   KEY_UP>,
             <0xfd   KEY_DOWN>,
             <0xf1   KEY_LEFT>,
