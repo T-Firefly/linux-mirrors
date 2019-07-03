@@ -24,6 +24,7 @@
 #include <sound/core.h>
 #include <sound/pcm_params.h>
 #include <sound/soc.h>
+#include <sound/tlv.h>
 #include "rk817_codec.h"
 
 static int dbg_enable;
@@ -31,6 +32,8 @@ static unsigned int codec_mute = 1;
 static unsigned int headset_status = 0;
 static struct gpio_desc *speak_gpiod;
 module_param_named(dbg_level, dbg_enable, int, 0644);
+
+static const DECLARE_TLV_DB_SCALE(vol_tlv, -9500, 37, 0);
 
 #define DBG(args...) \
 	do { \
@@ -714,6 +717,10 @@ static struct snd_kcontrol_new rk817_snd_path_controls[] = {
 
 	SOC_ENUM_EXT("Capture MIC Path", rk817_capture_path_type,
 		     rk817_capture_path_get, rk817_capture_path_put),
+
+	SOC_DOUBLE_R_RANGE_TLV("PCM", RK817_CODEC_DDAC_VOLL, RK817_CODEC_DDAC_VOLR, 0, 3, 255, 1, vol_tlv),
+
+	SOC_DOUBLE_R_TLV("Capture Volume", RK817_CODEC_DADC_VOLL, RK817_CODEC_DADC_VOLR, 0, 255, 1, vol_tlv),
 };
 
 static int rk817_set_dai_sysclk(struct snd_soc_dai *codec_dai,
