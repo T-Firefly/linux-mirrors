@@ -92,11 +92,8 @@ static int rockchip_set_ethaddr(void)
 
 static int rockchip_set_serialno(void)
 {
-	u8 low[CPUID_LEN / 2], high[CPUID_LEN / 2];
-	u8 cpuid[CPUID_LEN] = {0};
 	char serialno_str[VENDOR_SN_MAX];
-	int ret = 0, i;
-	u64 serialno;
+	int ret = 0;
 
 	/* Read serial number from vendor storage part */
 	memset(serialno_str, 0, VENDOR_SN_MAX);
@@ -109,6 +106,10 @@ static int rockchip_set_serialno(void)
 #endif
 #ifdef CONFIG_ROCKCHIP_EFUSE
 		struct udevice *dev;
+		u8 cpuid[CPUID_LEN] = {0};
+		u8 low[CPUID_LEN / 2], high[CPUID_LEN / 2];
+		u64 serialno;
+		int i;
 
 		/* retrieve the device */
 		ret = uclass_get_device_by_driver(UCLASS_MISC,
@@ -126,11 +127,6 @@ static int rockchip_set_serialno(void)
 			       __func__, ret);
 			return ret;
 		}
-#else
-		/* generate random cpuid */
-		for (i = 0; i < CPUID_LEN; i++)
-			cpuid[i] = (u8)(rand());
-#endif
 		/* Generate the serial number based on CPU ID */
 		for (i = 0; i < 8; i++) {
 			low[i] = cpuid[1 + (i << 1)];
@@ -142,6 +138,9 @@ static int rockchip_set_serialno(void)
 		snprintf(serialno_str, sizeof(serialno_str), "%llx", serialno);
 
 		env_set("serial#", serialno_str);
+#else
+		return 0;
+#endif
 #ifdef CONFIG_ROCKCHIP_VENDOR_PARTITION
 	}
 #endif
