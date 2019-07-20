@@ -33,6 +33,8 @@ struct adc_keys_state {
 	const struct adc_keys_button *map;
 };
 
+extern void headset_adc_set_status(int status);
+
 static void adc_keys_poll(struct input_polled_dev *dev)
 {
 	struct adc_keys_state *st = dev->private;
@@ -62,6 +64,11 @@ static void adc_keys_poll(struct input_polled_dev *dev)
 
 	if (keycode)
 		input_report_key(dev->input, keycode, 1);
+
+	if ((st->last_key != KEY_MEDIA) && (keycode == KEY_MEDIA))
+		headset_adc_set_status(1);
+	else if ((st->last_key == KEY_MEDIA) && (keycode != KEY_MEDIA))
+		headset_adc_set_status(0);
 
 	input_sync(dev->input);
 	st->last_key = keycode;

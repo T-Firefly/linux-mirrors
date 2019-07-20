@@ -29,6 +29,12 @@
 			press-threshold-microvolt = <1310000>;
 		};
 
+		headset-key {
+			linux,code = <KEY_MEDIA>;
+			label = "headset";
+			press-threshold-microvolt = <1800000>;
+		};
+
 		home-key {
 			linux,code = <KEY_HOME>;
 			label = "home";
@@ -623,6 +629,7 @@
 			pinctrl-0 = <&i2s1_2ch_mclk>;
 			hp-volume = <20>;
 			spk-volume = <3>;
+			speak-gpio = <&gpio0 RK_PA0 GPIO_ACTIVE_HIGH>;
 			status = "okay";
 		};
 	};

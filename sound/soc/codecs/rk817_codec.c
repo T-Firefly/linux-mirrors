@@ -27,6 +27,9 @@
 #include "rk817_codec.h"
 
 static int dbg_enable;
+static unsigned int codec_mute = 1;
+static unsigned int headset_status = 0;
+static struct gpio_desc *speak_gpiod;
 module_param_named(dbg_level, dbg_enable, int, 0644);
 
 #define DBG(args...) \
@@ -244,6 +247,11 @@ static int rk817_codec_ctl_gpio(struct rk817_codec_priv *rk817,
 		msleep(rk817->hp_mute_delay);
 	}
 
+	if (codec_mute == 0)
+		gpiod_set_value(speak_gpiod, (headset_status == 0) ? 1:0);
+	else
+		gpiod_set_value(speak_gpiod, 0);
+
 	return 0;
 }
 
@@ -342,6 +350,14 @@ static struct rk817_reg_val_typ capture_power_down_list[] = {
 
 #define RK817_CODEC_CAPTURE_POWER_DOWN_LIST_LEN \
 	ARRAY_SIZE(capture_power_down_list)
+
+void headset_adc_set_status(int status)
+{
+	headset_status = status;
+	rk817_codec_ctl_gpio(NULL, 0, 1);
+}
+
+EXPORT_SYMBOL_GPL(headset_adc_set_status);
 
 static int rk817_codec_power_up(struct snd_soc_codec *codec, int type)
 {
@@ -775,6 +791,7 @@ static int rk817_digital_mute(struct snd_soc_dai *dai, int mute)
 	struct rk817_codec_priv *rk817 = snd_soc_codec_get_drvdata(codec);
 
 	DBG("%s %d\n", __func__, mute);
+	codec_mute = mute;
 	if (mute)
 		snd_soc_update_bits(codec, RK817_CODEC_DDAC_MUTE_MIXCTL,
 				    DACMT_ENABLE, DACMT_ENABLE);
@@ -1105,6 +1122,13 @@ static int rk817_platform_probe(struct platform_device *pdev)
 			__func__, ret);
 		goto err_;
 	}
+
+	speak_gpiod = devm_gpiod_get(&pdev->dev, "speak", GPIOD_OUT_LOW);
+	if (IS_ERR(speak_gpiod)) {
+		printk("%s() Can not read property speak-gpio\n", __FUNCTION__);
+		goto err_;
+	}
+	gpiod_set_value(speak_gpiod, 0);
 
 	return 0;
 err_:
