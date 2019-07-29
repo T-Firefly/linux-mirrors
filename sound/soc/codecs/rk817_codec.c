@@ -552,7 +552,7 @@ static int rk817_playback_path_put(struct snd_kcontrol *kcontrol,
 			/* power on dac ibias/l/r */
 			snd_soc_write(codec, RK817_CODEC_ADAC_CFG1,
 				      PWD_DACBIAS_ON | PWD_DACD_ON |
-				      PWD_DACL_ON | PWD_DACR_ON);
+				      PWD_DACL_DOWN | PWD_DACR_DOWN);
 			/* CLASS D mode */
 			snd_soc_write(codec, RK817_CODEC_DDAC_MUTE_MIXCTL, 0x10);
 			/* CLASS D enable */
