@@ -35,6 +35,13 @@ module_param_named(dbg_level, dbg_enable, int, 0644);
 
 static const DECLARE_TLV_DB_SCALE(vol_tlv, -9500, 37, 0);
 
+/*
+ * DADC L/R MIC setting
+ * defined: Use L/R as inputs simultaneously.
+ * not defined: Use L/R as inputs respectively.
+ */
+#define RK817_CODEC_ONE_MIC
+
 #define DBG(args...) \
 	do { \
 		if (dbg_enable) { \
@@ -466,7 +473,11 @@ static const char * const rk817_playback_path_mode[] = {
 	"RING_SPK", "RING_HP", "RING_HP_NO_MIC", "RING_SPK_HP"}; /* 7-10 */
 
 static const char * const rk817_capture_path_mode[] = {
+#ifdef RK817_CODEC_ONE_MIC
+	"MIC OFF", "Main Mic"};
+#else
 	"MIC OFF", "Main Mic", "Hands Free Mic", "BT Sco Mic"};
+#endif
 
 static const char * const rk817_call_path_mode[] = {
 	"OFF", "RCV", "SPK", "HP", "HP_NO_MIC", "BT"}; /* 0-5 */
@@ -666,6 +677,7 @@ static int rk817_capture_path_put(struct snd_kcontrol *kcontrol,
 		if (pre_path == MIC_OFF)
 			rk817_codec_power_up(codec, RK817_CODEC_CAPTURE);
 
+#if !defined(RK817_CODEC_ONE_MIC)
 		if (rk817->adc_for_loopback) {
 			/* don't need to gain when adc use for loopback */
 			snd_soc_update_bits(codec, RK817_CODEC_AMIC_CFG0, 0xf, 0x0);
@@ -681,6 +693,7 @@ static int rk817_capture_path_put(struct snd_kcontrol *kcontrol,
 			snd_soc_update_bits(codec, RK817_CODEC_AMIC_CFG0,
 					    PWD_PGA_R_MASK, PWD_PGA_R_EN);
 		}
+#endif
 		break;
 	case HANDS_FREE_MIC:
 		if (pre_path == MIC_OFF)
