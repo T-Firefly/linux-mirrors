@@ -496,6 +496,32 @@ static SOC_ENUM_SINGLE_DECL(rk817_call_path_type,
 static SOC_ENUM_SINGLE_DECL(rk817_modem_input_type,
 	0, 0, rk817_modem_input_mode);
 
+static int rk817_save_volume(struct rk817_codec_priv *rk817,
+				   struct snd_soc_codec *codec, long int pre_path)
+{
+	switch (pre_path) {
+	case RCV:
+	case SPK_PATH:
+	case RING_SPK:
+		rk817->spk_volume = snd_soc_read(codec, RK817_CODEC_DDAC_VOLL);
+		break;
+	case HP_PATH:
+	case HP_NO_MIC:
+	case RING_HP:
+	case RING_HP_NO_MIC:
+		rk817->hp_volume = snd_soc_read(codec, RK817_CODEC_DDAC_VOLL);
+		break;
+	case SPK_HP:
+	case RING_SPK_HP:
+		rk817->hp_volume = snd_soc_read(codec, RK817_CODEC_DDAC_VOLL);
+		break;
+	default:
+		break;
+	}
+
+	return 0;
+}
+
 static int rk817_playback_path_get(struct snd_kcontrol *kcontrol,
 				   struct snd_ctl_elem_value *ucontrol)
 {
@@ -532,6 +558,8 @@ static int rk817_playback_path_put(struct snd_kcontrol *kcontrol,
 		clk_prepare_enable(rk817->mclk);
 	else
 		clk_disable_unprepare(rk817->mclk);
+
+	rk817_save_volume(rk817, codec, pre_path);
 
 	switch (rk817->playback_path) {
 	case OFF:
