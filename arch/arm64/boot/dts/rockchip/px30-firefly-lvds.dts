@@ -262,9 +262,9 @@
 		clock-names = "ext_clock";
 		uart_rts_gpios = <&gpio1 RK_PC3 GPIO_ACTIVE_LOW>;
 		pinctrl-names = "default","rts_gpio";
-		pinctrl-0 = <&uart1_rts>;
+		pinctrl-0 = <&uart1_rts>, <&bt_reset>;
 		pinctrl-1 = <&uart1_rts_gpio>;
-		BT,reset_gpio = <&gpio2 RK_PB0 GPIO_ACTIVE_HIGH>;
+		BT,reset_gpio = <&gpio1 RK_PB0 GPIO_ACTIVE_HIGH>;
 		//BT,wake_gpio = <&gpio0 RK_PB3 GPIO_ACTIVE_HIGH>;
 		BT,wake_host_irq = <&gpio0 RK_PA1 GPIO_ACTIVE_HIGH>;
 		status = "okay";
@@ -766,6 +766,12 @@
 };
 
 &pinctrl {
+	bluetooth {
+		bt_reset: bt-reset{
+			rockchip,pins = <1 RK_PB0 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+	};
+
 	headphone {
 		hp_det: hp-det {
 			rockchip,pins = <1 RK_PB0 RK_FUNC_GPIO &pcfg_pull_down>;
