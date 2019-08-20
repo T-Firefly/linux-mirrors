@@ -690,12 +690,12 @@
 };
 
 &uart3 {
-	status = "disabled"; // to enable uart3, plz disable pwm3
+	status = "okay"; // to enable uart3, plz disable pwm3
 	pinctrl-0 = <&uart3m0_xfer &uart3m0_cts &uart3m0_rts>;
 };
 
 &pwm3 {
-	status = "okay";
+	status = "disabled";
 	interrupts = <GIC_SPI 24 IRQ_TYPE_LEVEL_HIGH 0>;
 	compatible = "rockchip,remotectl-pwm";
 	pinctrl-names = "default";
