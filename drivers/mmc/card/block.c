@@ -2839,7 +2839,10 @@ static int mmc_blk_probe(struct mmc_card *card)
 #if defined(CONFIG_MMC_DW_ROCKCHIP) || defined(CONFIG_MMC_SDHCI_OF_ARASAN)
 	if (card->host->restrict_caps & RESTRICT_CARD_TYPE_EMMC) {
 		this_card = card;
-		md->disk->is_rk_disk = true;
+		if (strstr(saved_command_line, "storagemedia=sd"))
+			md->disk->is_rk_disk = false;
+		else
+			md->disk->is_rk_disk = true;
 	} else {
 		md->disk->is_rk_disk = false;
 	}
