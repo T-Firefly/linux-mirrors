@@ -13,8 +13,8 @@
 #include "rk3326-linux.dtsi"
 
 / {
-	model = "AIO-PX30JD4 Board 10.1 lvds (Android)";
-	compatible = "rockchip,px30-firefly-aiojd4-lvds","rockchip,px30";
+	model = "AIO-PX30JD4 Board (Linux Opensource)";
+	compatible = "firefly,px30-firefly-aiojd4-lvds","rockchip,px30";
 
 	adc-keys {
 		compatible = "adc-keys";
