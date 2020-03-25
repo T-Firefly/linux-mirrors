@@ -29,6 +29,7 @@
 #include <power/charge_display.h>
 #include <power/regulator.h>
 #include <asm/arch/boot_mode.h>
+#include <power/regulator.h>
 #include <asm/arch/clock.h>
 #include <asm/arch/cpu.h>
 #include <asm/arch/hotkey.h>
@@ -391,6 +392,9 @@ static void early_download_init(void)
 
 int board_init(void)
 {
+	int ret;
+	struct udevice *usb_otg_vbus;
+
 	board_debug_uart_init();
 
 #ifdef CONFIG_USING_KERNEL_DTB
@@ -413,6 +417,14 @@ int board_init(void)
 #endif
 
 	set_armclk_rate();
+
+	ret = regulator_get_by_devname("usb-otg-regulator", &usb_otg_vbus);
+	if (!ret) {
+		ret = regulator_set_enable(usb_otg_vbus, false);
+		if (ret) {
+			pr_err("Disable otg vbus supply fail!\n");
+		}
+	}
 
 #ifdef CONFIG_DM_DVFS
 	dvfs_init(true);
