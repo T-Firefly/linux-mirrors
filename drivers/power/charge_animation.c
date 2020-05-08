@@ -50,6 +50,7 @@ struct charge_image {
 struct charge_animation_priv {
 	struct udevice *pmic;
 	struct udevice *fg;
+	struct udevice *charger;
 	struct udevice *rtc;
 #ifdef CONFIG_LED
 	struct udevice *led_charging;
@@ -170,7 +171,7 @@ static int check_key_press(struct udevice *dev)
  * If not enable CONFIG_IRQ, cpu can't suspend to ATF or wfi, so that wakeup
  * period timer is useless.
  */
-#ifndef CONFIG_IRQ
+#if !defined(CONFIG_IRQ) || !defined(CONFIG_ARM_CPU_SUSPEND)
 static int system_suspend_enter(struct udevice *dev)
 {
 	return 0;
@@ -223,9 +224,11 @@ static int system_suspend_enter(struct udevice *dev)
 		putc('1');
 		putc('\n');
 	} else {
+		irqs_suspend();
 		printf("\nWfi\n");
 		wfi();
 		putc('1');
+		irqs_resume();
 	}
 
 	priv->suspend_delay_timeout = get_timer(0);
@@ -327,6 +330,16 @@ static int leds_update(struct udevice *dev, int soc)
 static int leds_update(struct udevice *dev, int soc) { return 0; }
 #endif
 
+static int fg_charger_get_chrg_online(struct udevice *dev)
+{
+	struct charge_animation_priv *priv = dev_get_priv(dev);
+	struct udevice *charger;
+
+	charger = priv->charger ? : priv->fg;
+
+	return fuel_gauge_get_chrg_online(charger);
+}
+
 static int charge_extrem_low_power(struct udevice *dev)
 {
 	struct charge_animation_pdata *pdata = dev_get_platdata(dev);
@@ -343,7 +356,7 @@ static int charge_extrem_low_power(struct udevice *dev)
 
 	while (voltage < pdata->low_power_voltage + 50) {
 		/* Check charger online */
-		charging = fuel_gauge_get_chrg_online(fg);
+		charging = fg_charger_get_chrg_online(dev);
 		if (charging <= 0) {
 			printf("%s: Not charging, online=%d. Shutdown...\n",
 			       __func__, charging);
@@ -366,7 +379,7 @@ static int charge_extrem_low_power(struct udevice *dev)
 		 * Just for fuel gauge to update something important,
 		 * including charge current, coulometer or other.
 		 */
-		soc = fuel_gauge_get_soc(fg);
+		soc = fuel_gauge_update_get_soc(fg);
 		if (soc < 0 || soc > 100) {
 			printf("get soc failed: %d\n", soc);
 			continue;
@@ -388,6 +401,11 @@ static int charge_extrem_low_power(struct udevice *dev)
 		if (voltage < 0) {
 			printf("get voltage failed: %d\n", voltage);
 			continue;
+		}
+
+		if (ctrlc()) {
+			printf("Extrem low charge: exit by ctrl+c\n");
+			break;
 		}
 	}
 
@@ -456,7 +474,7 @@ static int charge_animation_show(struct udevice *dev)
 #endif
 
 	/* Not charger online, exit */
-	charging = fuel_gauge_get_chrg_online(fg);
+	charging = fg_charger_get_chrg_online(dev);
 	if (charging <= 0) {
 		printf("Exit charge: due to charger offline\n");
 		return 0;
@@ -525,7 +543,7 @@ static int charge_animation_show(struct udevice *dev)
 		local_irq_disable();
 
 		/* Step1: Is charging now ? */
-		charging = fuel_gauge_get_chrg_online(fg);
+		charging = fg_charger_get_chrg_online(dev);
 		if (charging <= 0) {
 			printf("Not charging, online=%d. Shutdown...\n",
 			       charging);
@@ -543,7 +561,7 @@ static int charge_animation_show(struct udevice *dev)
 		debug("step2 (%d)... show_idx=%d\n", screen_on, show_idx);
 
 		/* Step2: get soc and voltage */
-		soc = fuel_gauge_get_soc(fg);
+		soc = fuel_gauge_update_get_soc(fg);
 		if (soc < 0 || soc > 100) {
 			printf("get soc failed: %d\n", soc);
 			continue;
@@ -755,6 +773,37 @@ show_images:
 	return 0;
 }
 
+static int fg_charger_get_device(struct udevice **fuel_gauge,
+				 struct udevice **charger)
+{
+	struct udevice *dev;
+	struct uclass *uc;
+	int ret, cap;
+
+	*fuel_gauge = NULL,
+	*charger = NULL;
+
+	ret = uclass_get(UCLASS_FG, &uc);
+	if (ret)
+		return ret;
+
+	for (uclass_first_device(UCLASS_FG, &dev);
+	     dev;
+	     uclass_next_device(&dev)) {
+		cap = fuel_gauge_capability(dev);
+		if (cap == (FG_CAP_CHARGER | FG_CAP_FUEL_GAUGE)) {
+			*fuel_gauge = dev;
+			*charger = NULL;
+		} else if (cap == FG_CAP_FUEL_GAUGE) {
+			*fuel_gauge = dev;
+		} else if (cap == FG_CAP_CHARGER) {
+			*charger = dev;
+		}
+	}
+
+	return (*fuel_gauge) ? 0 : -ENODEV;
+}
+
 static const struct dm_charge_display_ops charge_animation_ops = {
 	.show = charge_animation_show,
 };
@@ -774,8 +823,8 @@ static int charge_animation_probe(struct udevice *dev)
 		return ret;
 	}
 
-	/* Get fuel gauge: used for charging */
-	ret = uclass_get_device(UCLASS_FG, 0, &priv->fg);
+	/* Get fuel gauge and charger(If need) */
+	ret = fg_charger_get_device(&priv->fg, &priv->charger);
 	if (ret) {
 		if (ret == -ENODEV)
 			debug("Can't find FG\n");
@@ -800,7 +849,7 @@ static int charge_animation_probe(struct udevice *dev)
 	}
 
 	/* Initialize charge current */
-	soc = fuel_gauge_get_soc(priv->fg);
+	soc = fuel_gauge_update_get_soc(priv->fg);
 	if (soc < 0 || soc > 100) {
 		debug("get soc failed: %d\n", soc);
 		return -EINVAL;

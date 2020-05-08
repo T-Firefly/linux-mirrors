@@ -642,6 +642,8 @@ static int rockchip_vop_setup_csc_table(struct display_state *state)
 static int rockchip_vop_set_plane(struct display_state *state)
 {
 	struct crtc_state *crtc_state = &state->crtc_state;
+	const struct rockchip_crtc *crtc = crtc_state->crtc;
+	const struct vop_data *vop_data = crtc->data;
 	struct connector_state *conn_state = &state->conn_state;
 	struct drm_display_mode *mode = &conn_state->mode;
 	u32 act_info, dsp_info, dsp_st, dsp_stx, dsp_sty;
@@ -653,6 +655,7 @@ static int rockchip_vop_set_plane(struct display_state *state)
 	int crtc_w = crtc_state->crtc_w;
 	int crtc_h = crtc_state->crtc_h;
 	int xvir = crtc_state->xvir;
+	int x_mirror = 0, y_mirror = 0;
 
 	act_info = (src_h - 1) << 16;
 	act_info |= (src_w - 1) & 0xffff;
@@ -663,14 +666,36 @@ static int rockchip_vop_set_plane(struct display_state *state)
 	dsp_stx = crtc_x + mode->crtc_htotal - mode->crtc_hsync_start;
 	dsp_sty = crtc_y + mode->crtc_vtotal - mode->crtc_vsync_start;
 	dsp_st = dsp_sty << 16 | (dsp_stx & 0xffff);
+	/*
+	 * PX30 treat rgb888 as bgr888
+	 * so we reverse the rb swap to workaround
+	 */
+	if (VOP_MAJOR(vop_data->version) == 2 &&
+	    VOP_MINOR(vop_data->version) == 6 &&
+	    crtc_state->format == ROCKCHIP_FMT_RGB888)
+		crtc_state->rb_swap = !crtc_state->rb_swap;
 
-	if (crtc_state->ymirror) {
-		if (VOP_WIN_SUPPORT(vop, vop->win, ymirror))
+	if (mode->flags & DRM_MODE_FLAG_YMIRROR)
+		y_mirror = 1;
+	else
+		y_mirror = 0;
+	if (mode->flags & DRM_MODE_FLAG_XMIRROR)
+		x_mirror = 1;
+	else
+		x_mirror = 0;
+	if (crtc_state->ymirror ^ y_mirror)
+		y_mirror = 1;
+	else
+		y_mirror = 0;
+	if (y_mirror) {
+		if (VOP_CTRL_SUPPORT(vop, ymirror))
 			crtc_state->dma_addr += (src_h - 1) * xvir * 4;
 		else
-			crtc_state->ymirror = 0;
-	}
-	VOP_WIN_SET(vop, ymirror, crtc_state->ymirror);
+			y_mirror = 0;
+		}
+	VOP_CTRL_SET(vop, ymirror, y_mirror);
+	VOP_CTRL_SET(vop, xmirror, x_mirror);
+
 	VOP_WIN_SET(vop, format, crtc_state->format);
 	VOP_WIN_SET(vop, yrgb_vir, xvir);
 	VOP_WIN_SET(vop, yrgb_mst, crtc_state->dma_addr);

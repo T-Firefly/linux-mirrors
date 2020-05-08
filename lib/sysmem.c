@@ -4,6 +4,7 @@
  */
 
 #include <common.h>
+#include <bidram.h>
 #include <sysmem.h>
 #include <lmb.h>
 #include <malloc.h>
@@ -12,8 +13,10 @@
 DECLARE_GLOBAL_DATA_PTR;
 
 #define SYSMEM_MAGIC		0x4D454D53	/* "SMEM" */
-#define SYSMEM_ALLOC_ANYWHERE	0
+
+#define LMB_ALLOC_ANYWHERE	0		/* sync with lmb.c */
 #define SYSMEM_ALLOC_NO_ALIGN	1
+#define SYSMEM_ALLOC_ANYWHERE	2
 
 #define SYSMEM_I(fmt, args...)	printf("Sysmem: "fmt, ##args)
 #define SYSMEM_W(fmt, args...)	printf("Sysmem Warn: "fmt, ##args)
@@ -34,6 +37,22 @@ bool sysmem_has_init(void)
 {
 	return gd->flags & GD_FLG_RELOC ?
 	       plat_sysmem.has_initr : plat_sysmem.has_initf;
+}
+
+static inline int sysmem_is_overlap(phys_addr_t base1, phys_size_t size1,
+				    phys_addr_t base2, phys_size_t size2)
+{
+	return ((base1 < (base2 + size2)) && (base2 < (base1 + size1)));
+}
+
+static inline int sysmem_is_sub_region(struct memblock *sub,
+				       struct memblock *main)
+{
+	if (!sub || !main)
+		return false;
+
+	return ((sub->base >= main->base) &&
+		(sub->base + sub->size <= main->base + main->size));
 }
 
 void sysmem_dump(void)
@@ -87,16 +106,37 @@ void sysmem_dump(void)
 			overflow = false;
 		}
 
-		printf("    allocated.rgn[%ld].name  = \"%s\" %s\n",
-		       i, mem->attr.name, overflow ? "	   <Overflow!>" : "");
+		printf("    allocated.rgn[%ld].name  = \"%s\" %s %s\n",
+		       i, mem->attr.name, overflow ? "	   <Overflow!>" : "",
+		       mem->orig_base != mem->base ? "<*>" : "");
 		printf("		    .addr  = 0x%08lx - 0x%08lx (size: 0x%08lx)\n",
-		       (ulong)mem->base, (ulong)(mem->base + mem->size),
+		       (ulong)mem->orig_base,
+		       (ulong)(mem->orig_base + mem->size),
 		       (ulong)mem->size);
 		i++;
 	}
 
-	printf("\n    malloc_r: %d MiB, malloc_f: %d KiB\n",
-	       SIZE_MB(CONFIG_SYS_MALLOC_LEN), SIZE_KB(CONFIG_SYS_MALLOC_F_LEN));
+	/* Kernel 'reserved-memory' */
+	i = 0;
+	printf("\n");
+	list_for_each(node, &sysmem->kmem_resv_head) {
+		mem = list_entry(node, struct memblock, node);
+		allocated_size += mem->size;
+		printf("    kmem-resv.rgn[%ld].name  = \"%s\" %s\n",
+		       i, mem->attr.name,
+		       mem->orig_base != mem->base ? "<*>" : "");
+		printf("		    .addr  = 0x%08lx - 0x%08lx (size: 0x%08lx)\n",
+		       (ulong)mem->orig_base,
+		       (ulong)(mem->orig_base + mem->size),
+		       (ulong)mem->size);
+		i++;
+	}
+
+	printf("\n    framework malloc_r     = %3d MiB",
+	       SIZE_MB(CONFIG_SYS_MALLOC_LEN));
+	printf("\n    framework malloc_f     = %3d KiB\n",
+	       SIZE_KB(CONFIG_SYS_MALLOC_F_LEN));
+
 	printf("\n    allocated.total	   = 0x%08lx (%ld MiB. %ld KiB)\n",
 	       (ulong)allocated_size,
 	       SIZE_MB((ulong)allocated_size),
@@ -107,7 +147,7 @@ void sysmem_dump(void)
 	reserved_size = 0;
 	for (i = 0; i < lmb->reserved.cnt; i++) {
 		reserved_size += lmb->reserved.region[i].size;
-		printf("    LMB.reserved[%ld].addr   = 0x%08lx - 0x%08lx (size: 0x%08lx)\n", i,
+		printf("    LMB.allocated[%ld].addr  = 0x%08lx - 0x%08lx (size: 0x%08lx)\n", i,
 		       (ulong)lmb->reserved.region[i].base,
 		       (ulong)lmb->reserved.region[i].base +
 		       (ulong)lmb->reserved.region[i].size,
@@ -121,10 +161,106 @@ void sysmem_dump(void)
 	printf("    --------------------------------------------------------------------\n\n");
 }
 
-static inline int sysmem_is_overlap(phys_addr_t base1, phys_size_t size1,
-				    phys_addr_t base2, phys_size_t size2)
+void sysmem_overflow_check(void)
 {
-	return ((base1 < (base2 + size2)) && (base2 < (base1 + size1)));
+	struct sysmem *sysmem = &plat_sysmem;
+	struct list_head *node, *knode;
+	struct memcheck *check;
+	struct memblock *kmem;
+	struct memblock *smem;
+	struct memblock *rmem;
+	int overflow = 0, overlap = 0;
+
+	if (!sysmem_has_init())
+		return;
+
+#ifdef CONFIG_BIDRAM
+	/*
+	 * Check kernel 'reserved-memory' overlap with invisible regions
+	 *
+	 * Here, only print warning message when overlap with invisible region
+	 */
+	list_for_each(knode, &sysmem->kmem_resv_head) {
+		kmem = list_entry(knode, struct memblock, node);
+		rmem = bidram_reserved_is_overlap(kmem->base, kmem->size);
+		if (rmem) {
+			const char *alias;
+			int i, dump = 1;
+
+			/*
+			 * Ignore the sub region of invisible region.
+			 * eg: ramoops of SHM.
+			 */
+			alias = rmem->attr.alias[0];
+			if (alias && sysmem_is_sub_region(kmem, rmem)) {
+				for (i = 0; i < ALIAS_COUNT_MAX; i++, alias++) {
+					alias = rmem->attr.alias[i];
+					if (!alias)
+						continue;
+					if (!strncasecmp(kmem->attr.name, alias,
+							 strlen(alias))) {
+						dump = 0;
+						break;
+					}
+				}
+			}
+
+			if (dump)
+				SYSMEM_W("kernel 'reserved-memory' \"%s\"(0x%08lx - 0x%08lx) "
+					 "is overlap with [invisible] \"%s\" (0x%08lx - 0x%08lx)\n",
+					 kmem->attr.name, (ulong)kmem->base,
+					 (ulong)(kmem->base + kmem->size),
+					 rmem->attr.name, (ulong)rmem->base,
+					 (ulong)(rmem->base + rmem->size));
+		}
+	}
+#endif
+
+	list_for_each(node, &sysmem->allocated_head) {
+		smem = list_entry(node, struct memblock, node);
+		/*
+		 * Check kernel 'reserved-memory' overlap with sysmem allocated regions
+		 */
+		list_for_each(knode, &sysmem->kmem_resv_head) {
+			kmem = list_entry(knode, struct memblock, node);
+			if (sysmem_is_overlap(smem->base, smem->size,
+					      kmem->base, kmem->size)) {
+				if (smem->attr.flags & M_ATTR_KMEM_CAN_OVERLAP)
+					continue;
+
+				overlap = 1;
+				SYSMEM_W("kernel 'reserved-memory' \"%s\"(0x%08lx - 0x%08lx) "
+					 "is overlap with \"%s\" (0x%08lx - 0x%08lx)\n",
+					 kmem->attr.name, (ulong)kmem->base,
+					 (ulong)(kmem->base + kmem->size),
+					 smem->attr.name, (ulong)smem->base,
+					 (ulong)(smem->base + smem->size));
+			}
+		}
+
+		/*
+		 * Check sysmem allocated regions overflow.
+		 */
+		if (smem->attr.flags & M_ATTR_OFC) {
+			check = (struct memcheck *)
+				(smem->base + smem->size - sizeof(*check));
+			overflow = (check->magic != SYSMEM_MAGIC);
+		} else if (smem->attr.flags & M_ATTR_HOFC) {
+			check = (struct memcheck *)
+				(smem->base - sizeof(*check));
+			overflow = (check->magic != SYSMEM_MAGIC);
+		} else {
+			overflow = 0;
+		}
+
+		if (overflow) {
+			SYSMEM_E("Found there is region overflow!\n");
+			break;
+		}
+	}
+
+	if (overflow || overlap)
+		sysmem_dump();
 }
 
 static int sysmem_add(phys_addr_t base, phys_size_t size)
@@ -146,7 +282,7 @@ static int sysmem_add(phys_addr_t base, phys_size_t size)
 static const char *sysmem_alias2name(const char *name, int *id)
 {
 	const char *alias;
-	int n, i, j;
+	int i, j;
 	int match = 0;
 
 	for (i = 0; i < MEMBLK_ID_MAX; i++) {
@@ -161,8 +297,8 @@ static const char *sysmem_alias2name(const char *name, int *id)
 		if (!alias)
 			continue;
 
-		n = ARRAY_SIZE(mem_attr[i].alias);
-		for (j = 0; j < n; j++, alias++) {
+		for (j = 0; j < ALIAS_COUNT_MAX; j++) {
+			alias = mem_attr[i].alias[j];
 			if (alias && !strcasecmp(alias, name)) {
 				match = 1;
 				goto finish;
@@ -194,60 +330,108 @@ static void *sysmem_alloc_align_base(enum memblk_id id,
 	phys_addr_t paddr;
 	phys_addr_t alloc_base;
 	phys_size_t alloc_size;
-	phys_addr_t bank_base;
-	phys_size_t bank_size;
-	bool req_overlap = false; /* Only for kernel reserved-memory */
-	int i;
+	phys_addr_t orig_base = base;
 
 	if (!sysmem_has_init())
-		return NULL;
+		goto out;
 
-	if (id == MEMBLK_ID_BY_NAME || id == MEMBLK_ID_FDT_RESV) {
+	if (id == MEMBLK_ID_BY_NAME || id == MEMBLK_ID_KMEM_RESERVED) {
 		if (!mem_name) {
 			SYSMEM_E("NULL name for alloc sysmem\n");
-			return NULL;
-		} else if (id == MEMBLK_ID_FDT_RESV) {
-			for (i = 0; i < CONFIG_NR_DRAM_BANKS; i++) {
-				if (!gd->bd->bi_dram[i].size)
-					continue;
-
-				bank_base = gd->bd->bi_dram[i].start;
-				bank_size = gd->bd->bi_dram[i].size;
-				if (sysmem_is_overlap(base, size,
-						      bank_base, bank_size)) {
-					req_overlap = true;
-					break;
-				}
-			}
-
-			if (!req_overlap)
-				return (void *)base;
+			goto out;
 		}
+
+		/* Find: name, id and attr by outer mem_name & id */
 		name = sysmem_alias2name(mem_name, (int *)&id);
 		attr = mem_attr[id];
 		if (!attr.name)
 			attr.name = strdup(name);
+
+		/* Always make kernel 'reserved-memory' alloc successfully */
+		if (id == MEMBLK_ID_KMEM_RESERVED) {
+			struct memblock *mem;
+
+			mem = malloc(sizeof(*mem));
+			if (!mem) {
+				SYSMEM_E("No memory for \"%s\" alloc sysmem\n", name);
+				return mem;
+			}
+
+			attr.flags |= M_ATTR_KMEM_RESERVED;
+			mem->orig_base = orig_base;
+			mem->base = base;
+			mem->size = size;
+			mem->attr = attr;
+			sysmem->kmem_resv_cnt++;
+			list_add_tail(&mem->node, &sysmem->kmem_resv_head);
+
+			return (void *)base;
+		}
 	} else if (id > MEMBLK_ID_UNK && id < MEMBLK_ID_MAX) {
 		attr = mem_attr[id];
 		name = attr.name;
+
+		/*
+		 * Special handle for Android AVB alloc(on any where)
+		 *
+		 * Fixup base and place right after U-Boot stack, adding a lot
+		 * of space(4KB) maybe safer.
+		 */
+		if ((id == MEMBLK_ID_AVB_ANDROID) &&
+		    (base == SYSMEM_ALLOC_ANYWHERE)) {
+			base = gd->start_addr_sp -
+					CONFIG_SYS_STACK_SIZE - size - 0x1000;
+
+		} else if (base <= gd->bd->bi_dram[0].start) {
+			/*
+			 * On Rockchip platform:
+			 *
+			 * So far, we use M_ATTR_IGNORE_INVISIBLE for uncompress
+			 * kernel alloc, and for ARMv8 enabling AArch32 mode, the
+			 * ATF is still AArch64 and ocuppies 0~1MB and shmem 1~2M.
+			 * So let's ignore the region which overlap with them.
+			 */
+			if (attr.flags & M_ATTR_IGNORE_INVISIBLE) {
+				base = gd->bd->bi_dram[0].start;
+			} else {
+				SYSMEM_E("Failed to alloc invisible sub region 0x%08lx - 0x%08lx "
+					 "of \"%s\" at 0x%08lx - 0x%08lx\n",
+					 (ulong)base, (ulong)gd->bd->bi_dram[0].start,
+					 name, (ulong)base, (ulong)(base + size));
+				goto out;
+			}
+		}
 	} else {
 		SYSMEM_E("Unsupport memblk id %d for alloc sysmem\n", id);
-		return NULL;
+		goto out;
 	}
 
 	if (!size) {
 		SYSMEM_E("\"%s\" size is 0 for alloc sysmem\n", name);
-		return NULL;
+		goto out;
 	}
 
-	if (!IS_ALIGNED(base, 4)) {
+	/*
+	 * Some modules use "sysmem_alloc()" to alloc region for storage
+	 * read/write buffer, it should be aligned to cacheline size. eg: AVB.
+	 *
+	 * Aligned down to cacheline size if not aligned, otherwise the tail
+	 * of region maybe overflow.
+	 */
+	if (attr.flags & M_ATTR_CACHELINE_ALIGN &&
+	    !IS_ALIGNED(base, ARCH_DMA_MINALIGN)) {
+		base = ALIGN(base, ARCH_DMA_MINALIGN);
+		base -= ARCH_DMA_MINALIGN;
+	}
+
+	if (base != SYSMEM_ALLOC_ANYWHERE && !IS_ALIGNED(base, 4)) {
 		SYSMEM_E("\"%s\" base=0x%08lx is not 4-byte aligned\n",
 			 name, (ulong)base);
-		return NULL;
+		goto out;
 	}
 
-	/* Must be 4-byte aligned */
-	size = ALIGN(size, 4);
+	/* Must be sizeof(long) byte aligned */
+	size = ALIGN(size, sizeof(long));
 
 	SYSMEM_D("Enter alloc: \"%s\" 0x%08lx - 0x%08lx\n",
 		 name, (ulong)base, (ulong)(base + size));
@@ -259,28 +443,20 @@ static void *sysmem_alloc_align_base(enum memblk_id id,
 			 mem->attr.name, (ulong)mem->base,
 			 (ulong)(mem->base + mem->size));
 		if (!strcmp(mem->attr.name, name)) {
+			/* Allow double alloc for same but smaller region */
 			if (mem->base <= base && mem->size >= size)
 				return (void *)base;
 
 			SYSMEM_E("Failed to double alloc for existence \"%s\"\n", name);
-			return NULL;
+			goto out;
 		} else if (sysmem_is_overlap(mem->base, mem->size, base, size)) {
-			if (req_overlap && mem->attr.flags & M_ATTR_OVERLAP) {
-				if (lmb_reserve(&sysmem->lmb, base, size))
-					SYSMEM_E("Failed to overlap alloc \"%s\" "
-						 "at 0x%08lx - 0x%08lx\n",
-						 name, (ulong)base,
-						 (ulong)(base + size));
-				return (void *)base;
-			}
-
 			SYSMEM_E("\"%s\" (0x%08lx - 0x%08lx) alloc is "
 				 "overlap with existence \"%s\" (0x%08lx - "
 				 "0x%08lx)\n",
 				 name, (ulong)base, (ulong)(base + size),
 				 mem->attr.name, (ulong)mem->base,
 				 (ulong)(mem->base + mem->size));
-			return NULL;
+			goto out;
 		}
 	}
 
@@ -292,7 +468,7 @@ static void *sysmem_alloc_align_base(enum memblk_id id,
 
 	/* Alloc anywhere ? */
 	if (base == SYSMEM_ALLOC_ANYWHERE)
-		alloc_base = base;
+		alloc_base = LMB_ALLOC_ANYWHERE;
 	else
 		alloc_base = base + alloc_size;	/* LMB is align down alloc mechanism */
 
@@ -302,15 +478,18 @@ static void *sysmem_alloc_align_base(enum memblk_id id,
 			mem = malloc(sizeof(*mem));
 			if (!mem) {
 				SYSMEM_E("No memory for \"%s\" alloc sysmem\n", name);
-				return NULL;
+				goto out;
 			}
 
+			/* Record original base for dump */
+			mem->orig_base = orig_base;
 			mem->base = paddr;
 			mem->size = alloc_size;
 			mem->attr = attr;
 			sysmem->allocated_cnt++;
 			list_add_tail(&mem->node, &sysmem->allocated_head);
 
+			/* Add overflow check magic */
 			if (mem->attr.flags & M_ATTR_OFC) {
 				check = (struct memcheck *)(paddr + size);
 				check->magic = SYSMEM_MAGIC;
@@ -323,20 +502,68 @@ static void *sysmem_alloc_align_base(enum memblk_id id,
 				 "but at 0x%08lx - x%08lx\n",
 				 name, (ulong)base, (ulong)(base + size),
 				 (ulong)paddr, (ulong)(paddr + size));
-			if (lmb_free(&sysmem->lmb, paddr, alloc_size))
+			/* Free what we don't want allocated region */
+			if (lmb_free(&sysmem->lmb, paddr, alloc_size) < 0)
 				SYSMEM_E("Failed to free \"%s\"\n", name);
 
-			return NULL;
+			goto out;
 		}
 	} else {
 		SYSMEM_E("Failed to alloc \"%s\" at 0x%08lx - 0x%08lx\n",
 			 name, (ulong)base, (ulong)(base + size));
+		goto out;
 	}
 
 	SYSMEM_D("Exit alloc: \"%s\", paddr=0x%08lx, size=0x%08lx, align=0x%x, anywhere=%d\n",
 		 name, (ulong)paddr, (ulong)size, (u32)align, !base);
 
 	return (void *)paddr;
+
+out:
+	/*
+	 * Why: base + sizeof(ulong) ?
+	 * It's not a standard way to handle the case: the input base is 0.
+	 * Because 0 equals NULL, but we don't want to return NULL when alloc
+	 * successfully, so just return a !NULL value is okay.
+	 *
+	 * When it happens ?
+	 * Maybe 32-bit platform would alloc region for uncompress kernel
+	 * at 0 address.
+	 */
+	if (base == 0)
+		base = base + sizeof(ulong);
+
+	return (attr.flags & M_ATTR_IGNORE_INVISIBLE) ? (void *)base : NULL;
+}
+
+void *sysmem_alloc(enum memblk_id id, phys_size_t size)
+{
+	void *paddr;
+
+	paddr = sysmem_alloc_align_base(id,
+					NULL,
+					SYSMEM_ALLOC_ANYWHERE,
+					size,
+					SYSMEM_ALLOC_NO_ALIGN);
+	if (!paddr)
+		sysmem_dump();
+
+	return paddr;
+}
+
+void *sysmem_alloc_by_name(const char *name, phys_size_t size)
+{
+	void *paddr;
+
+	paddr = sysmem_alloc_align_base(MEMBLK_ID_BY_NAME,
+					name,
+					SYSMEM_ALLOC_ANYWHERE,
+					size,
+					SYSMEM_ALLOC_NO_ALIGN);
+	if (!paddr)
+		sysmem_dump();
+
+	return paddr;
 }
 
 void *sysmem_alloc_base(enum memblk_id id, phys_addr_t base, phys_size_t size)
@@ -375,7 +602,7 @@ void *sysmem_fdt_reserve_alloc_base(const char *name,
 {
 	void *paddr;
 
-	paddr = sysmem_alloc_align_base(MEMBLK_ID_FDT_RESV,
+	paddr = sysmem_alloc_align_base(MEMBLK_ID_KMEM_RESERVED,
 					name,
 					base,
 					size,
@@ -384,6 +611,38 @@ void *sysmem_fdt_reserve_alloc_base(const char *name,
 		sysmem_dump();
 
 	return paddr;
+}
+
+bool sysmem_can_alloc(phys_size_t base, phys_size_t size)
+{
+	struct sysmem *sysmem = &plat_sysmem;
+	phys_addr_t alloc_base;
+	phys_addr_t paddr;
+	int ret;
+
+	if (!sysmem_has_init())
+		return false;
+
+	/* LMB is align down alloc mechanism */
+	alloc_base = base + size;
+	paddr = __lmb_alloc_base(&sysmem->lmb,
+				 size,
+				 SYSMEM_ALLOC_NO_ALIGN,
+				 alloc_base);
+	if (paddr) {
+		/* If free failed, return false */
+		ret = lmb_free(&sysmem->lmb, base, size);
+		if (ret < 0) {
+			SYSMEM_E("Can't free at 0x%08lx - 0x%08lx, ret=%d\n",
+				 (ulong)base, (ulong)(base + size), ret);
+			return false;
+		}
+	} else {
+		SYSMEM_D("Can't alloc at 0x%08lx - 0x%08lx\n",
+			 (ulong)base, (ulong)(base + size));
+	}
+
+	return (paddr == base) ? true : false;
 }
 
 int sysmem_free(phys_addr_t base)
@@ -399,7 +658,7 @@ int sysmem_free(phys_addr_t base)
 	/* Find existence */
 	list_for_each(node, &sysmem->allocated_head) {
 		mem = list_entry(node, struct memblock, node);
-		if (mem->base == base) {
+		if (mem->base == base || mem->orig_base == base) {
 			found = 1;
 			break;
 		}
@@ -441,7 +700,10 @@ int sysmem_init(void)
 
 	lmb_init(&sysmem->lmb);
 	INIT_LIST_HEAD(&sysmem->allocated_head);
+	INIT_LIST_HEAD(&sysmem->kmem_resv_head);
 	sysmem->allocated_cnt = 0;
+	sysmem->kmem_resv_cnt = 0;
+
 	if (gd->flags & GD_FLG_RELOC) {
 		sysmem->has_initr = true;
 	} else {

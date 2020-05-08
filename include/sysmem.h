@@ -7,6 +7,7 @@
 #define _SYSMEM_H
 
 #include <memblk.h>
+#include <malloc.h>
 
 /*
  * CONFIG_SYS_FDT_PAD default value is sync with bootm framework in:
@@ -19,7 +20,9 @@
 struct sysmem {
 	struct lmb lmb;
 	struct list_head allocated_head;
+	struct list_head kmem_resv_head;
 	ulong allocated_cnt;
+	ulong kmem_resv_cnt;
 	bool has_initf;
 	bool has_initr;
 };
@@ -55,6 +58,16 @@ int sysmem_initr(void);
  * @return NULL on error, otherwise the allocated region address ptr
  */
 void *sysmem_alloc(enum memblk_id id, phys_size_t size);
+
+/**
+ * sysmem_alloc_by_name() - Alloc sysmem region by name at the expect addr
+ *
+ * @name: memblk name
+ * @size: region size
+ *
+ * @return NULL on error, otherwise the allocated region address ptr
+ */
+void *sysmem_alloc_by_name(const char *name, phys_size_t size);
 
 /**
  * sysmem_alloc_base() - Alloc sysmem region at the expect addr
@@ -93,6 +106,16 @@ void *sysmem_fdt_reserve_alloc_base(const char *name,
 				    phys_addr_t base, phys_size_t size);
 
 /**
+ * sysmem_can_alloc() - Check if the region can be allocated
+ *
+ * @base: region base
+ * @size: region size
+ *
+ * @return true on okay.
+ */
+bool sysmem_can_alloc(phys_size_t base, phys_size_t size);
+
+/**
  * sysmem_free() - Free allocated sysmem region
  *
  * @base: region base
@@ -102,9 +125,14 @@ void *sysmem_fdt_reserve_alloc_base(const char *name,
 int sysmem_free(phys_addr_t base);
 
 /**
- * sysmem_dump() - Dump all sysmem region state and check overflow
+ * sysmem_dump() - Dump all sysmem region state
  */
 void sysmem_dump(void);
+
+/**
+ * sysmem_overflow_check() - Sysmem regions overflow check
+ */
+void sysmem_overflow_check(void);
 
 /**
  * board_sysmem_reserve() - Weak function for board to implement
@@ -120,7 +148,20 @@ static inline int sysmem_init(void) { return 0; }
 static inline int sysmem_initr(void) { return 0; }
 static inline int sysmem_free(phys_addr_t base) { return 0; }
 static inline void sysmem_dump(void) {}
+void sysmem_overflow_check(void) {}
+
 __weak int board_sysmem_reserve(struct sysmem *sysmem) { return 0; }
+
+static inline void *sysmem_alloc(enum memblk_id id, phys_size_t size)
+{
+	return malloc(size);
+}
+
+static inline bool sysmem_can_alloc(phys_size_t base, phys_size_t size)
+{
+	return true;
+}
+
 static inline void *sysmem_alloc_base(enum memblk_id id,
 				      phys_addr_t base, phys_size_t size)
 {

@@ -16,6 +16,8 @@ enum _boot_mode {
 	BOOT_MODE_CHARGING,
 	BOOT_MODE_UMS,
 	BOOT_MODE_BROM_DOWNLOAD,
+	BOOT_MODE_PANIC,
+	BOOT_MODE_WATCHDOG,
 	BOOT_MODE_UNDEFINE,
 };
 
@@ -24,6 +26,7 @@ enum _boot_mode {
 #define PART_BOOT			"boot"
 #define PART_RECOVERY			"recovery"
 #define PART_DTBO			"dtbo"
+#define PART_LOGO			"logo"
 
 #define RK_BLK_SIZE 512
 

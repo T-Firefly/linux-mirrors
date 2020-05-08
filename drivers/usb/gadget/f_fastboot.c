@@ -2059,7 +2059,7 @@ static void cb_oem(struct usb_ep *ep, struct usb_request *req)
 	} else if (strncmp("at-unlock-vboot", cmd + 4, 15) == 0) {
 #ifdef CONFIG_RK_AVB_LIBAVB_USER
 		uint8_t lock_state;
-		bool out_is_trusted = true;
+		char out_is_trusted = true;
 
 		if (rk_avb_read_lock_state(&lock_state))
 			fastboot_tx_write_str("FAILlock sate read failure");
@@ -2121,6 +2121,16 @@ static void cb_oem(struct usb_ep *ep, struct usb_request *req)
 		if (rk_avb_write_vbootkey_hash((uint8_t *)digest,
 					       SHA256_SUM_LEN)) {
 			fastboot_tx_write_str("FAILvbootkey hash write failure");
+			return;
+		}
+		fastboot_tx_write_str("OKAY");
+#else
+		fastboot_tx_write_str("FAILnot implemented");
+#endif
+	} else if (strncmp("init-ab-metadata", cmd + 4, 16) == 0) {
+#ifdef CONFIG_RK_AVB_LIBAVB_USER
+		if (rk_avb_init_ab_metadata()) {
+			fastboot_tx_write_str("FAILinit ab data fail!");
 			return;
 		}
 		fastboot_tx_write_str("OKAY");
