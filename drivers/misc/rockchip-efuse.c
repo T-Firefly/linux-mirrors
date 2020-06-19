@@ -15,6 +15,8 @@
 #include <linux/bitops.h>
 #include <linux/delay.h>
 #include <misc.h>
+#include <asm/arch/rockchip_smccc.h>
+#include <linux/arm-smccc.h>
 
 #define T_CSB_P_S		0
 #define T_PGENB_P_S		0
@@ -83,6 +85,9 @@
 #define RK3328_INT_FINISH	BIT(0)
 #define RK3328_AUTO_ENB		BIT(0)
 #define RK3328_AUTO_RD		BIT(1)
+
+#define REG_EFUSE_CTRL      0x0000
+#define REG_EFUSE_DOUT      0x0004
 
 typedef int (*EFUSE_READ)(struct udevice *dev, int offset, void *buf, int size);
 
@@ -262,6 +267,43 @@ static int rockchip_rk3288_efuse_read(struct udevice *dev, int offset,
 	return 0;
 }
 
+static int rockchip_rk3288_efuse_secure_read(struct udevice *dev, int offset,
+				      void *buf, int size)
+{
+	ofnode node = dev->node;
+	phys_addr_t phys = ofnode_get_addr(node);
+	u8 *buffer = buf;
+	u32 wr_val;
+
+	sip_smc_secure_reg_write(phys + REG_EFUSE_CTRL,
+				 RK3288_LOAD | RK3288_PGENB);
+
+	udelay(1);
+	while (size--) {
+		wr_val = sip_smc_secure_reg_read(phys + REG_EFUSE_CTRL).a1 &
+			 (~(RK3288_A_MASK << RK3288_A_SHIFT));
+		sip_smc_secure_reg_write(phys + REG_EFUSE_CTRL, wr_val);
+		wr_val = sip_smc_secure_reg_read(phys + REG_EFUSE_CTRL).a1 |
+			 ((offset++ & RK3288_A_MASK) << RK3288_A_SHIFT);
+		sip_smc_secure_reg_write(phys + REG_EFUSE_CTRL, wr_val);
+		udelay(1);
+		wr_val = sip_smc_secure_reg_read(phys + REG_EFUSE_CTRL).a1 |
+			 RK3288_STROBE;
+		sip_smc_secure_reg_write(phys + REG_EFUSE_CTRL, wr_val);
+		udelay(1);
+		*buffer++ = sip_smc_secure_reg_read(phys + REG_EFUSE_DOUT).a1;
+		wr_val = sip_smc_secure_reg_read(phys + REG_EFUSE_CTRL).a1 &
+			 (~RK3288_STROBE);
+		sip_smc_secure_reg_write(phys + REG_EFUSE_CTRL, wr_val);
+		udelay(1);
+	}
+
+	sip_smc_secure_reg_write(phys + REG_EFUSE_CTRL,
+				 RK3288_PGENB | RK3288_CSB);
+
+	return 0;
+}
+
 static int rockchip_rk3328_efuse_read(struct udevice *dev, int offset,
 				      void *buf, int size)
 {
@@ -357,6 +399,10 @@ static const struct udevice_id rockchip_efuse_ids[] = {
 	{
 		.compatible = "rockchip,rk322x-efuse",
 		.data = (ulong)&rockchip_rk3288_efuse_read,
+	},
+	{
+		.compatible = "rockchip,rk3288-secure-efuse",
+		.data = (ulong)&rockchip_rk3288_efuse_secure_read,
 	},
 	{
 		.compatible = "rockchip,rk3328-efuse",
