@@ -185,7 +185,7 @@ void board_debug_uart_init(void)
 	/* Set channel C as UART2 input */
 	rk_clrsetreg(&grf->iofunc_con0,
 		     CON_IOMUX_UART2SEL_MASK,
-		     CON_IOMUX_UART2SEL_M0 << CON_IOMUX_UART2SEL_SHIFT);
+		     CON_IOMUX_UART2SEL_M1 << CON_IOMUX_UART2SEL_SHIFT);
 #endif
 }
 
