@@ -144,7 +144,7 @@ void board_debug_uart_init(void)
 	/* Set channel A as UART2 input */
 	rk_clrsetreg(&grf->soc_con7,
 		     GRF_UART_DBG_SEL_MASK,
-		     GRF_UART_DBG_SEL_A << GRF_UART_DBG_SEL_SHIFT);
+		     GRF_UART_DBG_SEL_C << GRF_UART_DBG_SEL_SHIFT);
 #else
 	/* Set channel C as UART2 input */
 	rk_clrsetreg(&grf->soc_con7,
