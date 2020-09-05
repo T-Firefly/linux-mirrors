@@ -16,7 +16,7 @@
 	compatible = "rockchip,rk3399pro-firefly-core", "rockchip,rk3399pro";
 	
  	chosen {
-	        bootargs = "earlycon=uart8250,mmio32,0xff1a0000 swiotlb=1 console=ttyFIQ0 rw root=PARTUUID=614e0000-0000 rootfstype=ext4 rootwait systemd.gpt_auto=0";
+		bootargs = "earlycon=uart8250,mmio32,0xff1a0000 swiotlb=1 console=ttyFIQ0 ro root=PARTLABEL=rootfs rootfstype=ext4 rootwait overlayroot=device:dev=PARTLABEL=userdata,fstype=ext4,mkfs=1 coherent_pool=1m systemd.gpt_auto=0 cgroup_enable=memory swapaccount=1";
 	};
 	
 	fiq_debugger: fiq-debugger {
