@@ -142,7 +142,7 @@ static void init_display_buffer(ulong base)
 	memory_end = memory_start;
 }
 
-static void *get_display_buffer(int size)
+void *get_display_buffer(int size)
 {
 	unsigned long roundup_memory = roundup(memory_end, PAGE_SIZE);
 	void *buf;
@@ -163,7 +163,7 @@ static unsigned long get_display_size(void)
 	return memory_end - memory_start;
 }
 
-static bool can_direct_logo(int bpp)
+bool can_direct_logo(int bpp)
 {
 	return bpp == 24 || bpp == 32;
 }
@@ -336,6 +336,23 @@ static int display_get_timing_from_dts(struct panel_state *panel_state,
 	mode->flags = flags;
 
 	return 0;
+}
+
+/**
+ * drm_mode_max_resolution_filter - mark modes out of vop max resolution
+ * @edid_data: structure store mode list
+ * @max_output: vop max output resolution
+ */
+void drm_mode_max_resolution_filter(struct hdmi_edid_data *edid_data,
+				    struct vop_rect *max_output)
+{
+	int i;
+
+	for (i = 0; i < edid_data->modes; i++) {
+		if (edid_data->mode_buf[i].hdisplay > max_output->width ||
+		    edid_data->mode_buf[i].vdisplay > max_output->height)
+			edid_data->mode_buf[i].invalid = true;
+	}
 }
 
 /**
@@ -523,10 +540,11 @@ static int display_init(struct display_state *state)
 	struct rockchip_crtc *crtc = crtc_state->crtc;
 	const struct rockchip_crtc_funcs *crtc_funcs = crtc->funcs;
 	struct drm_display_mode *mode = &conn_state->mode;
-	int bpc;
 	int ret = 0;
 	static bool __print_once = false;
-
+#if defined(CONFIG_I2C_EDID)
+	int bpc;
+#endif
 	if (!__print_once) {
 		__print_once = true;
 		printf("Rockchip UBOOT DRM driver version: %s\n", DRIVER_VERSION);
@@ -538,6 +556,24 @@ static int display_init(struct display_state *state)
 	if (!conn_funcs || !crtc_funcs) {
 		printf("failed to find connector or crtc functions\n");
 		return -ENXIO;
+	}
+
+	if (crtc_state->crtc->active &&
+	    memcmp(&crtc_state->crtc->active_mode, &conn_state->mode,
+		   sizeof(struct drm_display_mode))) {
+		printf("%s has been used for output type: %d, mode: %dx%dp%d\n",
+			crtc_state->dev->name,
+			crtc_state->crtc->active_mode.type,
+			crtc_state->crtc->active_mode.hdisplay,
+			crtc_state->crtc->active_mode.vdisplay,
+			crtc_state->crtc->active_mode.vrefresh);
+		return -ENODEV;
+	}
+
+	if (crtc_funcs->preinit) {
+		ret = crtc_funcs->preinit(state);
+		if (ret)
+			return ret;
 	}
 
 	if (panel_state->panel)
@@ -582,10 +618,12 @@ static int display_init(struct display_state *state)
 		ret = video_bridge_read_edid(conn_state->bridge->dev,
 					     conn_state->edid, EDID_SIZE);
 		if (ret > 0) {
+#if defined(CONFIG_I2C_EDID)
 			ret = edid_get_drm_mode(conn_state->edid, ret, mode,
 						&bpc);
 			if (!ret)
 				edid_print_info((void *)&conn_state->edid);
+#endif
 		} else {
 			ret = video_bridge_get_timing(conn_state->bridge->dev);
 		}
@@ -593,6 +631,7 @@ static int display_init(struct display_state *state)
 		ret = conn_funcs->get_timing(state);
 	} else if (conn_funcs->get_edid) {
 		ret = conn_funcs->get_edid(state);
+#if defined(CONFIG_I2C_EDID)
 		if (!ret) {
 			ret = edid_get_drm_mode((void *)&conn_state->edid,
 						sizeof(conn_state->edid), mode,
@@ -600,6 +639,7 @@ static int display_init(struct display_state *state)
 			if (!ret)
 				edid_print_info((void *)&conn_state->edid);
 		}
+#endif
 	}
 
 	if (ret)
@@ -613,6 +653,10 @@ static int display_init(struct display_state *state)
 			goto deinit;
 	}
 	state->is_init = 1;
+
+	crtc_state->crtc->active = true;
+	memcpy(&crtc_state->crtc->active_mode,
+	       &conn_state->mode, sizeof(struct drm_display_mode));
 
 	return 0;
 
@@ -669,8 +713,6 @@ static int display_enable(struct display_state *state)
 	const struct rockchip_crtc *crtc = crtc_state->crtc;
 	const struct rockchip_crtc_funcs *crtc_funcs = crtc->funcs;
 	struct panel_state *panel_state = &state->panel_state;
-
-	display_init(state);
 
 	if (!state->is_init)
 		return -EINVAL;
@@ -755,10 +797,10 @@ static int display_logo(struct display_state *state)
 	struct crtc_state *crtc_state = &state->crtc_state;
 	struct connector_state *conn_state = &state->conn_state;
 	struct logo_info *logo = &state->logo;
-	int hdisplay, vdisplay;
+	int hdisplay, vdisplay, ret;
 
-	display_init(state);
-	if (!state->is_init)
+	ret = display_init(state);
+	if (!state->is_init || ret)
 		return -ENODEV;
 
 	switch (logo->bpp) {
@@ -775,7 +817,6 @@ static int display_logo(struct display_state *state)
 		printf("can't support bmp bits[%d]\n", logo->bpp);
 		return -EINVAL;
 	}
-	crtc_state->rb_swap = logo->bpp != 32;
 	hdisplay = conn_state->mode.hdisplay;
 	vdisplay = conn_state->mode.vdisplay;
 	crtc_state->src_w = logo->width;
@@ -925,9 +966,9 @@ static int load_kernel_bmp_logo(struct logo_info *logo, const char *bmp_name)
 	}
 
 	logo->mem = dst;
+#endif
 
 	return 0;
-#endif
 }
 
 static int load_bmp_logo(struct logo_info *logo, const char *bmp_name)
@@ -1386,6 +1427,9 @@ static int rockchip_display_probe(struct udevice *dev)
 
 		get_crtc_mcu_mode(&s->crtc_state);
 
+		ret = ofnode_read_u32_default(s->crtc_state.node,
+					      "rockchip,dual-channel-swap", 0);
+		s->crtc_state.dual_channel_swap = ret;
 		if (connector_panel_init(s)) {
 			printf("Warn: Failed to init panel drivers\n");
 			free(s);

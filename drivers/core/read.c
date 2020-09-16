@@ -15,6 +15,11 @@ int dev_read_u32_default(struct udevice *dev, const char *propname, int def)
 	return ofnode_read_u32_default(dev_ofnode(dev), propname, def);
 }
 
+int dev_read_s32_default(struct udevice *dev, const char *propname, int def)
+{
+	return ofnode_read_s32_default(dev_ofnode(dev), propname, def);
+}
+
 const char *dev_read_string(struct udevice *dev, const char *propname)
 {
 	return ofnode_read_string(dev_ofnode(dev), propname);
@@ -147,6 +152,16 @@ int dev_read_phandle(struct udevice *dev)
 const void *dev_read_prop(struct udevice *dev, const char *propname, int *lenp)
 {
 	return ofnode_get_property(dev_ofnode(dev), propname, lenp);
+}
+
+const char *dev_hide_prop(struct udevice *dev, const char *propname)
+{
+	return ofnode_hide_property(dev_ofnode(dev), propname);
+}
+
+int dev_present_prop(struct udevice *dev, const char *propname)
+{
+	return ofnode_present_property(dev_ofnode(dev), propname);
 }
 
 int dev_read_alias_seq(struct udevice *dev, int *devnump)

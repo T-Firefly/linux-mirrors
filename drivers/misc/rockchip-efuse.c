@@ -12,11 +12,11 @@
 #include <command.h>
 #include <display_options.h>
 #include <dm.h>
+#include <linux/arm-smccc.h>
 #include <linux/bitops.h>
 #include <linux/delay.h>
 #include <misc.h>
 #include <asm/arch/rockchip_smccc.h>
-#include <linux/arm-smccc.h>
 
 #define T_CSB_P_S		0
 #define T_PGENB_P_S		0
@@ -85,9 +85,6 @@
 #define RK3328_INT_FINISH	BIT(0)
 #define RK3328_AUTO_ENB		BIT(0)
 #define RK3328_AUTO_RD		BIT(1)
-
-#define REG_EFUSE_CTRL      0x0000
-#define REG_EFUSE_DOUT      0x0004
 
 typedef int (*EFUSE_READ)(struct udevice *dev, int offset, void *buf, int size);
 
@@ -267,42 +264,56 @@ static int rockchip_rk3288_efuse_read(struct udevice *dev, int offset,
 	return 0;
 }
 
+#ifndef CONFIG_SPL_BUILD
 static int rockchip_rk3288_efuse_secure_read(struct udevice *dev, int offset,
-				      void *buf, int size)
+					     void *buf, int size)
 {
-	ofnode node = dev->node;
-	phys_addr_t phys = ofnode_get_addr(node);
+	struct rockchip_efuse_platdata *plat = dev_get_platdata(dev);
+	struct rockchip_efuse_regs *efuse =
+		(struct rockchip_efuse_regs *)plat->base;
 	u8 *buffer = buf;
-	u32 wr_val;
+	int max_size = RK3288_NFUSES * RK3288_BYTES_PER_FUSE;
+	struct arm_smccc_res res;
 
-	sip_smc_secure_reg_write(phys + REG_EFUSE_CTRL,
+	if (size > (max_size - offset))
+		size = max_size - offset;
+
+	/* Switch to read mode */
+	sip_smc_secure_reg_write((ulong)&efuse->ctrl,
 				 RK3288_LOAD | RK3288_PGENB);
-
 	udelay(1);
 	while (size--) {
-		wr_val = sip_smc_secure_reg_read(phys + REG_EFUSE_CTRL).a1 &
-			 (~(RK3288_A_MASK << RK3288_A_SHIFT));
-		sip_smc_secure_reg_write(phys + REG_EFUSE_CTRL, wr_val);
-		wr_val = sip_smc_secure_reg_read(phys + REG_EFUSE_CTRL).a1 |
-			 ((offset++ & RK3288_A_MASK) << RK3288_A_SHIFT);
-		sip_smc_secure_reg_write(phys + REG_EFUSE_CTRL, wr_val);
+		res = sip_smc_secure_reg_read((ulong)&efuse->ctrl);
+		sip_smc_secure_reg_write((ulong)&efuse->ctrl, res.a1 &
+					 (~(RK3288_A_MASK << RK3288_A_SHIFT)));
+		/* set addr */
+		res = sip_smc_secure_reg_read((ulong)&efuse->ctrl);
+		sip_smc_secure_reg_write((ulong)&efuse->ctrl, res.a1 |
+					 ((offset++ & RK3288_A_MASK) <<
+					  RK3288_A_SHIFT));
 		udelay(1);
-		wr_val = sip_smc_secure_reg_read(phys + REG_EFUSE_CTRL).a1 |
-			 RK3288_STROBE;
-		sip_smc_secure_reg_write(phys + REG_EFUSE_CTRL, wr_val);
-		udelay(1);
-		*buffer++ = sip_smc_secure_reg_read(phys + REG_EFUSE_DOUT).a1;
-		wr_val = sip_smc_secure_reg_read(phys + REG_EFUSE_CTRL).a1 &
-			 (~RK3288_STROBE);
-		sip_smc_secure_reg_write(phys + REG_EFUSE_CTRL, wr_val);
+		/* strobe low to high */
+		res = sip_smc_secure_reg_read((ulong)&efuse->ctrl);
+		sip_smc_secure_reg_write((ulong)&efuse->ctrl,
+					 res.a1 | RK3288_STROBE);
+		ndelay(60);
+		/* read data */
+		res = sip_smc_secure_reg_read((ulong)&efuse->dout);
+		*buffer++ = res.a1;
+		/* reset strobe to low */
+		res = sip_smc_secure_reg_read((ulong)&efuse->ctrl);
+		sip_smc_secure_reg_write((ulong)&efuse->ctrl,
+					 res.a1 & (~RK3288_STROBE));
 		udelay(1);
 	}
 
-	sip_smc_secure_reg_write(phys + REG_EFUSE_CTRL,
+	/* Switch to standby mode */
+	sip_smc_secure_reg_write((ulong)&efuse->ctrl,
 				 RK3288_PGENB | RK3288_CSB);
 
 	return 0;
 }
+#endif
 
 static int rockchip_rk3328_efuse_read(struct udevice *dev, int offset,
 				      void *buf, int size)
@@ -367,8 +378,31 @@ static int rockchip_efuse_read(struct udevice *dev, int offset,
 	return (*efuse_read)(dev, offset, buf, size);
 }
 
+static int rockchip_efuse_capatiblity(struct udevice *dev, u32 *buf)
+{
+	*buf = device_is_compatible(dev, "rockchip,rk3288-secure-efuse") ?
+	       OTP_S : OTP_NS;
+
+	return 0;
+}
+
+static int rockchip_efuse_ioctl(struct udevice *dev, unsigned long request,
+				void *buf)
+{
+	int ret = -EINVAL;
+
+	switch (request) {
+	case IOCTL_REQ_CAPABILITY:
+		ret = rockchip_efuse_capatiblity(dev, buf);
+		break;
+	}
+
+	return ret;
+}
+
 static const struct misc_ops rockchip_efuse_ops = {
 	.read = rockchip_efuse_read,
+	.ioctl = rockchip_efuse_ioctl,
 };
 
 static int rockchip_efuse_ofdata_to_platdata(struct udevice *dev)
@@ -384,10 +418,12 @@ static const struct udevice_id rockchip_efuse_ids[] = {
 		.compatible = "rockchip,rk1808-efuse",
 		.data = (ulong)&rockchip_rk1808_efuse_read,
 	},
+#ifndef CONFIG_SPL_BUILD
 	{
-		.compatible = "rockchip,rockchip-efuse",
-		.data = (ulong)&rockchip_rk3288_efuse_read,
+		.compatible = "rockchip,rk3288-secure-efuse",
+		.data = (ulong)&rockchip_rk3288_efuse_secure_read,
 	},
+#endif
 	{
 		.compatible = "rockchip,rk3066a-efuse",
 		.data = (ulong)&rockchip_rk3288_efuse_read,
@@ -399,10 +435,6 @@ static const struct udevice_id rockchip_efuse_ids[] = {
 	{
 		.compatible = "rockchip,rk322x-efuse",
 		.data = (ulong)&rockchip_rk3288_efuse_read,
-	},
-	{
-		.compatible = "rockchip,rk3288-secure-efuse",
-		.data = (ulong)&rockchip_rk3288_efuse_secure_read,
 	},
 	{
 		.compatible = "rockchip,rk3328-efuse",

@@ -56,6 +56,16 @@ static inline bool dev_of_valid(struct udevice *dev)
 int dev_read_u32_default(struct udevice *dev, const char *propname, int def);
 
 /**
+ * dev_read_s32_default() - read a signed 32-bit integer from a device's DT property
+ *
+ * @dev:	device to read DT property from
+ * @propname:	name of the property to read from
+ * @def:	default value to return if the property has no value
+ * @return property value, or @def if not found
+ */
+int dev_read_s32_default(struct udevice *dev, const char *propname, int def);
+
+/**
  * dev_read_string() - Read a string from a device's DT property
  *
  * @dev:	device to read DT property from
@@ -308,6 +318,24 @@ int dev_read_phandle(struct udevice *dev);
  * @return pointer to property, or NULL if not found
  */
 const void *dev_read_prop(struct udevice *dev, const char *propname, int *lenp);
+
+/**
+ * dev_hide_prop() - hide a property
+ *
+ * @np: Pointer to device node holding property
+ * @name: Name of property to hide
+ * @return hidden name if ok, otherwise NULL
+ */
+const char *dev_hide_prop(struct udevice *dev, const char *propname);
+
+/**
+ * dev_present_prop() - present a property hidden before
+ *
+ * @np: Pointer to device node holding property
+ * @name: Hidden name of property
+ * @return 0 if ok, otherwise failed
+ */
+int dev_present_prop(struct udevice *dev, const char *propname);
 
 /**
  * dev_read_alias_seq() - Get the alias sequence number of a node
