@@ -9,15 +9,16 @@
 #include <android_image.h>
 #include <boot_rkimg.h>
 #include <bmp_layout.h>
+#include <crypto.h>
 #include <fs.h>
 #include <malloc.h>
 #include <sysmem.h>
 #include <asm/io.h>
 #include <asm/unaligned.h>
-#include <android_avb/libavb_ab.h>
-#include <android_avb/rk_avb_ops_user.h>
 #include <dm/ofnode.h>
 #include <linux/list.h>
+#include <u-boot/sha1.h>
+#include <u-boot/sha256.h>
 #include <asm/arch/resource_img.h>
 
 DECLARE_GLOBAL_DATA_PTR;
@@ -29,7 +30,8 @@ DECLARE_GLOBAL_DATA_PTR;
 #define CONTENT_VERSION			0
 #define ENTRY_TAG			"ENTR"
 #define ENTRY_TAG_SIZE			4
-#define MAX_FILE_NAME_LEN		256
+#define MAX_FILE_NAME_LEN		220
+#define MAX_HASH_LEN			32
 
 #define DTB_FILE			"rk-kernel.dtb"
 
@@ -95,12 +97,16 @@ struct resource_img_hdr {
 struct resource_entry {
 	char		tag[4];
 	char		name[MAX_FILE_NAME_LEN];
+	char		hash[MAX_HASH_LEN];
+	uint32_t	hash_size;
 	uint32_t	f_offset;
 	uint32_t	f_size;
 };
 
 struct resource_file {
 	char		name[MAX_FILE_NAME_LEN];
+	char		hash[MAX_HASH_LEN];
+	uint32_t	hash_size;
 	uint32_t	f_offset;	/* Sector addr */
 	uint32_t	f_size;		/* Bytes */
 	struct list_head link;
@@ -151,6 +157,8 @@ static int add_file_to_list(struct resource_entry *entry, int rsce_base)
 	file->rsce_base = rsce_base;
 	file->f_offset = entry->f_offset;
 	file->f_size = entry->f_size;
+	file->hash_size = entry->hash_size;
+	memcpy(file->hash, entry->hash, entry->hash_size);
 	list_add_tail(&file->link, &entrys_head);
 
 	debug("entry:%p  %s offset:%d size:%d\n",
@@ -194,6 +202,49 @@ static int replace_resource_entry(const char *f_name, uint32_t base,
 	return 0;
 }
 
+static int read_logo_bmp(const char *name, disk_partition_t *part,
+			 uint32_t offset, uint32_t *size)
+{
+	struct blk_desc *dev_desc;
+	struct bmp_header *header;
+	u32 blk_start, blk_offset, filesz;
+	int ret;
+
+	dev_desc = rockchip_get_bootdev();
+	if (!dev_desc)
+		return -ENODEV;
+
+	blk_offset = DIV_ROUND_UP(offset, dev_desc->blksz);
+	blk_start = part->start + blk_offset;
+	header = memalign(ARCH_DMA_MINALIGN, dev_desc->blksz);
+	if (!header) {
+		ret = -ENOMEM;
+		goto err;
+	}
+	ret = blk_dread(dev_desc, blk_start, 1, header);
+	if (ret != 1) {
+		ret = -EIO;
+		goto err;
+	}
+
+	if (header->signature[0] != 'B' ||
+	    header->signature[1] != 'M') {
+		ret = -EINVAL;
+		goto err;
+	}
+
+	filesz = get_unaligned_le32(&header->file_size);
+	ret = replace_resource_entry(name, blk_start, blk_offset, filesz);
+	if (!ret) {
+		printf("LOGO: %s\n", name);
+		if (size)
+			*size = filesz;
+	}
+err:
+	free(header);
+
+	return ret;
+}
 /*
  * There are: logo/battery pictures and dtb file in the resource image by default.
  *
@@ -210,13 +261,12 @@ static int init_resource_list(struct resource_img_hdr *hdr)
 {
 	struct resource_entry *entry;
 	struct blk_desc *dev_desc;
-	struct bmp_header *header;
 	char *boot_partname = PART_BOOT;
 	disk_partition_t part_info;
 	int resource_found = 0;
 	void *content = NULL;
 	int rsce_base = 0;
-	int dtb_offset = 0;
+	__maybe_unused int dtb_offset = 0;
 	int dtb_size = 0;
 	int e_num, cnt;
 	int size;
@@ -248,30 +298,14 @@ static int init_resource_list(struct resource_img_hdr *hdr)
 	if (!hdr)
 		return -ENOMEM;
 
+	/*
+	 * Anyway, we must read android hdr firstly from boot partition to get
+	 * the 'os_version' for android_bcb_msg_sector_offset() to confirm BCB
+	 * message offset of misc partition.
+	 */
 #ifdef CONFIG_ANDROID_BOOT_IMAGE
 	struct andr_img_hdr *andr_hdr;
 
-	/* Get boot mode from misc */
-#ifndef CONFIG_ANDROID_AB
-	if (rockchip_get_boot_mode() == BOOT_MODE_RECOVERY)
-		boot_partname = PART_RECOVERY;
-#endif
-
-	/* Get slot suffix and append it for A/B system */
-#ifdef CONFIG_ANDROID_AB
-	char slot_suffix[3] = {0};
-
-	if (rk_avb_get_current_slot(slot_suffix)) {
-		ret = -ENODEV;
-		goto out;
-	}
-
-	boot_partname = android_str_append(boot_partname, slot_suffix);
-	if (!boot_partname) {
-		ret = -EINVAL;
-		goto out;
-	}
-#endif
 	ret = part_get_info_by_name(dev_desc, boot_partname, &part_info);
 	if (ret < 0) {
 		printf("%s: failed to get %s part, ret=%d\n",
@@ -279,7 +313,6 @@ static int init_resource_list(struct resource_img_hdr *hdr)
 		goto parse_resource_part;
 	}
 
-	/* Try to find resource from android second position */
 	andr_hdr = (void *)hdr;
 	ret = blk_dread(dev_desc, part_info.start, cnt, andr_hdr);
 	if (ret != cnt) {
@@ -294,17 +327,40 @@ static int init_resource_list(struct resource_img_hdr *hdr)
 		u32 os_ver = andr_hdr->os_version >> 11;
 		u32 os_lvl = andr_hdr->os_version & ((1U << 11) - 1);
 
-#ifdef DEBUG
-		android_print_contents(andr_hdr);
-#endif
-		if (os_ver)
+		if (os_ver) {
+			gd->bd->bi_andr_version = andr_hdr->os_version;
 			printf("Android %u.%u, Build %u.%u\n",
 			       (os_ver >> 14) & 0x7F, (os_ver >> 7) & 0x7F,
 			       (os_lvl >> 4) + 2000, os_lvl & 0x0F);
+		}
+	}
 
-		debug("%s: Load resource from %s second pos\n",
-		      __func__, part_info.name);
+	/* Get boot mode from misc and read if recovery mode */
+#ifndef CONFIG_ANDROID_AB
+	if (rockchip_get_boot_mode() == BOOT_MODE_RECOVERY) {
+		boot_partname = PART_RECOVERY;
 
+		ret = part_get_info_by_name(dev_desc, boot_partname, &part_info);
+		if (ret < 0) {
+			printf("%s: failed to get %s part, ret=%d\n",
+			       __func__, boot_partname, ret);
+			goto parse_resource_part;
+		}
+
+		/* Try to find resource from android second position */
+		andr_hdr = (void *)hdr;
+		ret = blk_dread(dev_desc, part_info.start, cnt, andr_hdr);
+		if (ret != cnt) {
+			printf("%s: failed to read %s hdr, ret=%d\n",
+			       __func__, part_info.name, ret);
+			ret = -EIO;
+			goto out;
+		}
+	}
+#endif
+
+	ret = android_image_check_header(andr_hdr);
+	if (!ret) {
 		rsce_base = part_info.start * dev_desc->blksz;
 		rsce_base += andr_hdr->page_size;
 		rsce_base += ALIGN(andr_hdr->kernel_size, andr_hdr->page_size);
@@ -328,8 +384,6 @@ parse_resource_part:
 
 	/* If not find android image, get resource file from resource part */
 	if (!resource_found) {
-		debug("%s: Load resource from resource part\n", __func__);
-
 		boot_partname = PART_RESOURCE;
 		ret = part_get_info_by_name(dev_desc, boot_partname, &part_info);
 		if (ret < 0) {
@@ -385,7 +439,7 @@ parse_resource_part:
 	}
 
 	ret = 0;
-	printf("Load FDT from %s part\n", boot_partname);
+	printf("Found DTB in %s part\n", boot_partname);
 
 parse_second_pos_dtb:
 #ifdef CONFIG_ANDROID_BOOT_IMAGE
@@ -408,55 +462,50 @@ parse_second_pos_dtb:
 		add_file_to_list(entry, part_info.start);
 		free(entry);
 		ret = 0;
-		printf("Load FDT from %s part(second pos)\n", boot_partname);
+		printf("Found DTB in %s part(second pos)\n", boot_partname);
 	}
 
 parse_logo:
 #endif
 	/*
-	 * Add logo.bmp from "logo" parititon
+	 * Add logo.bmp and logo_kernel.bmp from "logo" parititon
 	 *
-	 * We provide a "logo" partition for user to store logo.bmp
-	 * and update from kernel user space dynamically.
+	 * Provide a "logo" partition for user to store logo.bmp and
+	 * logo_kernel.bmp, so that the users can update them from
+	 * kernel or user-space dynamically.
+	 *
+	 * "logo" partition layout, not change order:
+	 *
+	 *   |----------------------| 0x00
+	 *   | raw logo.bmp         |
+	 *   |----------------------| N*512-byte aligned
+	 *   | raw logo_kernel.bmp  |
+	 *   |----------------------|
+	 *
+	 * N: the sector count of logo.bmp
 	 */
 	if (part_get_info_by_name(dev_desc, PART_LOGO, &part_info) >= 0) {
-		header = memalign(ARCH_DMA_MINALIGN, dev_desc->blksz);
-		if (!header) {
-			ret = -ENOMEM;
-			goto err;
-		}
+		u32 filesz;
 
-		ret = blk_dread(dev_desc, part_info.start, 1, header);
-		if (ret != 1) {
-			ret = -EIO;
-			goto err2;
-		}
-
-		if (header->signature[0] != 'B' ||
-		    header->signature[1] != 'M') {
-			ret = 0;
-			goto err2;
-		}
-
-		ret = replace_resource_entry("logo.bmp", part_info.start, 0,
-					     get_unaligned_le32(&header->file_size));
-		if (!ret)
-			printf("Load logo.bmp from logo part\n");
-err2:
-		free(header);
+		if (!read_logo_bmp("logo.bmp", &part_info, 0, &filesz))
+			read_logo_bmp("logo_kernel.bmp", &part_info,
+				      filesz, NULL);
 	}
 
 	/*
 	 * boot_img_hdr_v2 feature.
 	 *
-	 * If dtb position is present, replace the old with new one
+	 * If dtb position is present, replace the old with new one if
+	 * we don't need to verify DTB hash from resource.img file entry.
 	 */
 	if (dtb_size) {
+#ifndef CONFIG_ROCKCHIP_DTB_VERIFY
 		ret = replace_resource_entry(DTB_FILE, rsce_base,
 					     dtb_offset, dtb_size);
 		if (ret)
 			printf("Failed to load dtb from dtb position\n");
 		else
+#endif
 			env_update("bootargs", "androidboot.dtb_idx=0");
 	}
 err:
@@ -486,28 +535,6 @@ static struct resource_file *get_file_info(struct resource_img_hdr *hdr,
 	}
 
 	return NULL;
-}
-
-int rockchip_get_resource_file_offset(void *resc_hdr, const char *name)
-{
-	struct resource_file *file;
-
-	file = get_file_info(resc_hdr, name);
-	if (!file)
-		return -ENFILE;
-
-	return file->f_offset;
-}
-
-int rockchip_get_resource_file_size(void *resc_hdr, const char *name)
-{
-	struct resource_file *file;
-
-	file = get_file_info(resc_hdr, name);
-	if (!file)
-		return -ENFILE;
-
-	return file->f_size;
 }
 
 /*
@@ -551,6 +578,7 @@ int rockchip_read_resource_file(void *buf, const char *name,
 	return ret;
 }
 
+#ifdef CONFIG_ROCKCHIP_HWID_DTB
 #define is_digit(c)		((c) >= '0' && (c) <= '9')
 #define is_abcd(c)		((c) >= 'a' && (c) <= 'd')
 #define is_equal(c)		((c) == '=')
@@ -563,7 +591,6 @@ int rockchip_read_resource_file(void *buf, const char *name,
 #define MAX_ADC_CH_NR		10
 #define MAX_GPIO_NR		10
 
-#ifdef CONFIG_ADC
 /*
  * How to make it works ?
  *
@@ -652,12 +679,6 @@ static int rockchip_read_dtb_by_adc(const char *file_name)
 
 	return found ? 0 : -ENOENT;
 }
-#else
-static int rockchip_read_dtb_by_adc(const char *file_name)
-{
-	return  -ENOENT;
-}
-#endif
 
 static int gpio_parse_base_address(fdt_addr_t *gpio_base_addr)
 {
@@ -795,73 +816,11 @@ static int rockchip_read_dtb_by_gpio(const char *file_name)
 	return found ? 0 : -ENOENT;
 }
 
-#ifdef CONFIG_ROCKCHIP_EARLY_DISTRO_DTB
-static int rockchip_read_distro_dtb_file(char *fdt_addr)
-{
-	const char *cmd = "part list ${devtype} ${devnum} -bootable devplist";
-	char *devnum, *devtype, *devplist;
-	char devnum_part[12];
-	char fdt_hex_str[19];
-	char *fs_argv[5];
-	int ret;
-
-	if (!rockchip_get_bootdev() || !fdt_addr)
-		return -ENODEV;
-
-	ret = run_command_list(cmd, -1, 0);
-	if (ret)
-		return ret;
-
-	devplist = env_get("devplist");
-	if (!devplist)
-		return -ENODEV;
-
-	devtype = env_get("devtype");
-	devnum = env_get("devnum");
-	sprintf(devnum_part, "%s:%s", devnum, devplist);
-	sprintf(fdt_hex_str, "0x%lx", (ulong)fdt_addr);
-
-#ifdef CONFIG_CMD_FS_GENERIC
-	fs_argv[0] = "load";
-	fs_argv[1] = devtype,
-	fs_argv[2] = devnum_part;
-	fs_argv[3] = fdt_hex_str;
-	fs_argv[4] = CONFIG_ROCKCHIP_EARLY_DISTRO_DTB_PATH;
-
-	if (do_load(NULL, 0, 5, fs_argv, FS_TYPE_ANY))
-		return -EIO;
-#endif
-	if (fdt_check_header(fdt_addr))
-		return -EIO;
-
-	return fdt_totalsize(fdt_addr);
-}
-#endif
-
-int rockchip_read_dtb_file(void *fdt_addr)
+/* Get according to hardware id(GPIO/ADC) */
+static struct resource_file *rockchip_read_hwid_dtb(void)
 {
 	struct resource_file *file;
 	struct list_head *node;
-	char *dtb_name = DTB_FILE;
-	int size = -ENODEV;
-
-	if (list_empty(&entrys_head)) {
-		if (init_resource_list(NULL)) {
-			/* Load dtb from distro boot.img */
-#ifdef CONFIG_ROCKCHIP_EARLY_DISTRO_DTB
-			printf("Distro DTB: %s\n",
-			       CONFIG_ROCKCHIP_EARLY_DISTRO_DTB_PATH);
-			size = rockchip_read_distro_dtb_file(fdt_addr);
-			if (size < 0)
-				return size;
-			if (!sysmem_alloc_base(MEMBLK_ID_FDT,
-				(phys_addr_t)fdt_addr,
-				ALIGN(size, RK_BLK_SIZE) + CONFIG_SYS_FDT_PAD))
-				return -ENOMEM;
-#endif
-			return size;
-		}
-	}
 
 	/* Find dtb file according to hardware id(GPIO/ADC) */
 	list_for_each(node, &entrys_head) {
@@ -872,38 +831,40 @@ int rockchip_read_dtb_file(void *fdt_addr)
 		if (strstr(file->name, KEY_WORDS_ADC_CTRL) &&
 		    strstr(file->name, KEY_WORDS_ADC_CH) &&
 		    !rockchip_read_dtb_by_adc(file->name)) {
-			dtb_name = file->name;
-			break;
+			return file;
 		} else if (strstr(file->name, KEY_WORDS_GPIO) &&
 			   !rockchip_read_dtb_by_gpio(file->name)) {
-			dtb_name = file->name;
-			break;
+			return file;
 		}
 	}
 
-	printf("DTB: %s\n", dtb_name);
-
-	size = rockchip_get_resource_file_size((void *)fdt_addr, dtb_name);
-	if (size < 0)
-		return size;
-
-	if (!sysmem_alloc_base(MEMBLK_ID_FDT, (phys_addr_t)fdt_addr,
-			       ALIGN(size, RK_BLK_SIZE) + CONFIG_SYS_FDT_PAD))
-		return -ENOMEM;
-
-	size = rockchip_read_resource_file((void *)fdt_addr, dtb_name, 0, 0);
-	if (size < 0)
-		return size;
-
-	if (fdt_check_header(fdt_addr)) {
-		printf("Get a bad DTB file\n");
-		return -EBADF;
-	}
-
-	/* Apply DTBO */
-#if defined(CONFIG_CMD_DTIMG) && defined(CONFIG_OF_LIBFDT_OVERLAY)
-	android_fdt_overlay_apply((void *)fdt_addr);
+	return NULL;
+}
 #endif
 
-	return size;
+int rockchip_read_resource_dtb(void *fdt_addr, char **hash, int *hash_size)
+{
+	struct resource_file *file;
+	int ret;
+
+	file = get_file_info(NULL, DTB_FILE);
+#ifdef CONFIG_ROCKCHIP_HWID_DTB
+	if (!file)
+		file = rockchip_read_hwid_dtb();
+#endif
+	if (!file)
+		return -ENODEV;
+
+	ret = rockchip_read_resource_file(fdt_addr, file->name, 0, 0);
+	if (ret < 0)
+		return ret;
+
+	if (fdt_check_header(fdt_addr))
+		return -EBADF;
+
+	*hash = file->hash;
+	*hash_size = file->hash_size;
+	printf("DTB: %s\n", file->name);
+
+	return 0;
 }
