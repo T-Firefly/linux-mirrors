@@ -209,7 +209,9 @@ void rockchip_free_loader_memory(struct drm_device *drm)
 	if (private->domain) {
 		iommu_unmap(private->domain, logo->dma_addr,
 			    logo->iommu_map_size);
+		mutex_lock(&private->mm_lock);
 		drm_mm_remove_node(&logo->mm);
+		mutex_unlock(&private->mm_lock);
 	} else {
 		dma_unmap_sg(drm->dev, logo->sgt->sgl,
 			     logo->sgt->nents, DMA_TO_DEVICE);
@@ -269,9 +271,11 @@ static int init_loader_memory(struct drm_device *drm_dev)
 
 	if (private->domain) {
 		memset(&logo->mm, 0, sizeof(logo->mm));
+		mutex_lock(&private->mm_lock);
 		ret = drm_mm_insert_node_generic(&private->mm, &logo->mm,
 						 size, PAGE_SIZE,
 						 0, 0, 0);
+		mutex_unlock(&private->mm_lock);
 		if (ret < 0) {
 			DRM_ERROR("out of I/O virtual memory: %d\n", ret);
 			goto err_free_pages;
@@ -349,10 +353,10 @@ get_framebuffer_by_node(struct drm_device *drm_dev, struct device_node *node)
 
 	switch (bpp) {
 	case 16:
-		mode_cmd.pixel_format = DRM_FORMAT_BGR565;
+		mode_cmd.pixel_format = DRM_FORMAT_RGB565;
 		break;
 	case 24:
-		mode_cmd.pixel_format = DRM_FORMAT_BGR888;
+		mode_cmd.pixel_format = DRM_FORMAT_RGB888;
 		break;
 	case 32:
 		mode_cmd.pixel_format = DRM_FORMAT_XRGB8888;

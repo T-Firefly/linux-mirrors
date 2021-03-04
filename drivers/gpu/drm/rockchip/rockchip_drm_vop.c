@@ -1754,12 +1754,10 @@ static void vop_plane_atomic_update(struct drm_plane *plane,
 
 	rb_swap = has_rb_swapped(fb->pixel_format);
 	/*
-	 * Px30 treats rgb888 as bgr888
-	 * so we reverse the rb swap to workaround
+	 * VOP full need to do rb swap to show rgb888/bgr888 format color correctly
 	 */
-	if ((fb->pixel_format == DRM_FORMAT_RGB888 ||
-	     fb->pixel_format == DRM_FORMAT_BGR888) &&
-	    (VOP_MAJOR(vop->version) == 2 && VOP_MINOR(vop->version) == 6))
+	if ((fb->pixel_format == DRM_FORMAT_RGB888 || fb->pixel_format == DRM_FORMAT_BGR888) &&
+	    VOP_MAJOR(vop->version) == 3)
 		rb_swap = !rb_swap;
 	VOP_WIN_SET(vop, win, rb_swap, rb_swap);
 
@@ -2725,6 +2723,10 @@ static void vop_crtc_enable(struct drm_crtc *crtc)
 	 */
 	if (vop->lut_active)
 		vop_crtc_load_lut(crtc);
+
+	if (vop->mcu_timing.mcu_pix_total)
+		vop_mcu_mode(crtc);
+
 	dclk_inv = (adjusted_mode->flags & DRM_MODE_FLAG_PPIXDATA) ? 0 : 1;
 
 	VOP_CTRL_SET(vop, dclk_pol, dclk_inv);
@@ -2858,8 +2860,6 @@ static void vop_crtc_enable(struct drm_crtc *crtc)
 
 	clk_set_rate(vop->dclk, adjusted_mode->crtc_clock * 1000);
 
-	if (vop->mcu_timing.mcu_pix_total)
-		vop_mcu_mode(crtc);
 
 	vop_cfg_done(vop);
 
