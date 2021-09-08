@@ -250,6 +250,22 @@
 
 };
 
+&i2c7 {
+	status = "okay";
+	gslx680: gslx680@41 {
+		compatible = "gslX680";
+		reg = <0x41>;
+		screen_max_x = <800>;
+		screen_max_y = <1280>;
+		touch-gpio = <&gpio4 28 IRQ_TYPE_LEVEL_LOW>;	//GPIO4_D4
+		reset-gpio = <&gpio4 26 GPIO_ACTIVE_HIGH>;	//GPIO4_D2
+		flip-x = <1>;
+		flip-y = <0>;
+		swap-xy = <0>;
+		gsl,fw = <1>;
+	};
+};
+
 
 // LED
 &power_led {
